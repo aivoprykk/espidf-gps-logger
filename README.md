@@ -1,15 +1,19 @@
-How to build PlatformIO based project
+ESP-IDF Gps Logger
 =====================================
+Based on https://github.com/RP6conrad/ESP-GPS-Logger but intended to xxmove away from Arduino.
 
-4. Run these commands:
+
+Prerequirement is PlatformIO or ESP-IDF. Also git is good to have in PATH.
 
 ```shell
 # Clone repository
 $ git clone https://github.com/aivoprykk/espidf-gps-logger.git
 
-```shell
 # Change directory
 $ cd espidf-gps-logger
+
+# Update/Init submodules
+# git submodule update --recursive --init
 
 # Build project
 $ pio run
