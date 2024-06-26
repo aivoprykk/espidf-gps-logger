@@ -1,39 +1,39 @@
 [submodule "components/logger_ubx"]
 	path = components/logger_ubx
-	url = ssh://git@10.10.19.80/git/logger_ubx.git
+	url = ssh://git@github.com/aivoprykk/logger_ubx.git
 [submodule "components/logger_adc"]
 	path = components/logger_adc
-	url = ssh://git@10.10.19.80/git/logger_adc.git
+	url = ssh://git@github.com/aivoprykk/logger_adc.git
 [submodule "components/logger_common"]
 	path = components/logger_common
-	url = ssh://git@10.10.19.80/git/logger_common.git
+	url = ssh://git@github.com/aivoprykk/logger_common.git
 [submodule "components/logger_context"]
 	path = components/logger_context
-	url = ssh://git@10.10.19.80/git/logger_context.git
+	url = ssh://git@github.com/aivoprykk/logger_context.git
 [submodule "components/logger_config"]
 	path = components/logger_config
-	url = ssh://git@10.10.19.80/git/logger_config.git
+	url = ssh://git@github.com/aivoprykk/logger_config.git
 [submodule "components/gps_log"]
 	path = components/gps_log
-	url = ssh://git@10.10.19.80/git/gps_log.git
+	url = ssh://git@github.com/aivoprykk/gps_log.git
 [submodule "components/logger_http"]
 	path = components/logger_http
-	url = ssh://git@10.10.19.80/git/logger_http.git
+	url = ssh://git@github.com/aivoprykk/logger_http.git
 [submodule "components/logger_str"]
 	path = components/logger_str
-	url = ssh://git@10.10.19.80/git/logger_str.git
+	url = ssh://git@github.com/aivoprykk/logger_str.git
 [submodule "components/logger_vfs"]
 	path = components/logger_vfs
-	url = ssh://git@10.10.19.80/git/logger_vfs.git
+	url = ssh://git@github.com/aivoprykk/logger_vfs.git
 [submodule "components/logger_wifi"]
 	path = components/logger_wifi
-	url = ssh://git@10.10.19.80/git/logger_wifi.git
+	url = ssh://git@github.com/aivoprykk/logger_wifi.git
 [submodule "components/display"]
 	path = components/display
-	url = ssh://git@10.10.19.80/git/display.git
+	url = ssh://git@github.com/aivoprykk/display.git
 [submodule "components/logger_button"]
 	path = components/logger_button
-	url = ssh://git@10.10.19.80/git/logger_button.git
+	url = ssh://git@github.com/aivoprykk/logger_button.git
 [submodule "components/esp_littlefs"]
 	path = components/esp_littlefs
 	url = https://github.com/joltwallet/esp_littlefs.git
@@ -43,7 +43,7 @@
 	branch = v8.4.0
 [submodule "components/esp_lcd_panel_ssd1680"]
 	path = components/esp_lcd_panel_ssd1680
-	url = ssh://git@10.10.19.80/git/esp_lcd_panel_ssd1680.git
+	url = ssh://git@github.com/aivoprykk/esp_lcd_panel_ssd1680.git
 [submodule "components/ccan_json"]
 	path = components/ccan_json
-	url = ssh://git@10.10.19.80/git/ccan_json.git
+	url = ssh://git@github.com/aivoprykk/ccan_json.git
