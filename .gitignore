@@ -1,0 +1,6 @@
+.DS_Store
+.pio
+.vscode
+build
+managed_components
+local_components
