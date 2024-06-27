@@ -479,12 +479,16 @@ static void gpsTask(void *parameter) {
                 ubx_setup(m_context.gps.ublox_config);
                 ubx_fail_count++;
             }
-            if(ubx_fail_count>5)
+            if(ubx_fail_count>5) {
+                if(!ubxMessage->mon_ver.hwVersion[0]) // only when no hwVersion is received
                     app_mode = APP_MODE_WIFI;
+                else
+                    ubx_fail_count = 0;
+            }
             goto loop_tail;
         }
 
-        ubx_msg_handler(&mctx);  // only decoding if no Wifi connection}
+        ubx_msg_handler(&mctx); // only decoding if no Wifi connection}
         ubx_msg_do(&mctx);
         
     loop_tail:
@@ -979,31 +983,32 @@ void init_power() {
     // gpio_set_direction((gpio_num_t)PIN_LCD_BL, GPIO_MODE_OUTPUT);
     // gpio_set_level(PIN_LCD_BL, 1);
 }
-#endif
+#endif    
+
 static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data) {
     
     if(base == LOGGER_EVENT) {
         switch(id) {
             case LOGGER_EVENT_SDCARD_MOUNTED:
-                ESP_LOGI(TAG, "[%s] LOGGER_EVENT_SDCARD_MOUNTED", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
                 m_context.sdOK = true;
                 m_context.freeSpace = sdcard_space();
                 break;
             case LOGGER_EVENT_SDCARD_MOUNT_FAILED:
-                ESP_LOGI(TAG, "[%s] LOGGER_EVENT_SDCARD_MOUNT_FAILED", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
                 m_context.sdOK = false;
                 m_context.freeSpace = 0;
                 break;
             case LOGGER_EVENT_SDCARD_UNMOUNTED:
-                ESP_LOGI(TAG, "[%s] LOGGER_EVENT_SDCARD_UNMOUNTED", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
                 m_context.sdOK = false;
                 m_context.freeSpace = 0;
                 break;
             case LOGGER_EVENT_FAT_PARTITION_MOUNTED:
-                ESP_LOGI(TAG, "[%s] LOGGER_EVENT_FAT_PARTITION_MOUNTED", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
                 break;
             case LOGGER_EVENT_FAT_PARTITION_MOUNT_FAILED:
-                ESP_LOGI(TAG, "[%s] LOGGER_EVENT_FAT_PARTITION_MOUNT_FAILED", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
                 break;
             case LOGGER_EVENT_FAT_PARTITION_UNMOUNTED:
                 break;
@@ -1014,32 +1019,32 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
             //     ESP_LOGW(TAG, "--- LOGGER_EVENT_SCREEN_UPDATE task elapsed:%" PRId32 " ---", *(int32_t *)event_data);
             //     break;
             default:
-                ESP_LOGI(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+                // ESP_LOGI(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
                 break;
         }
     }
     else if(base == UBX_EVENT) {
         switch(id) {
             case UBX_EVENT_DATETIME_SET:
-                ESP_LOGI(TAG, "[%s] UBX_EVENT_DATETIME_SET", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
                 break;
             case UBX_EVENT_UART_INIT_DONE:
-                ESP_LOGI(TAG, "[%s] UBX_EVENT_UART_INIT_DONE", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
                 break;
             case UBX_EVENT_UART_INIT_FAIL:
-                ESP_LOGI(TAG, "[%s] UBX_EVENT_UART_INIT_FAIL", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
                 break;
             case UBX_EVENT_UART_DEINIT_DONE:
-                ESP_LOGI(TAG, "[%s] UBX_EVENT_UART_DEINIT_DONE", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
                 break;
             case UBX_EVENT_SETUP_DONE:
-                ESP_LOGI(TAG, "[%s] UBX_EVENT_SETUP_DONE", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
                 break;
             case UBX_EVENT_SETUP_FAIL:
-                ESP_LOGI(TAG, "[%s] UBX_EVENT_SETUP_FAIL", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
                 break;
             default:
-                ESP_LOGI(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+                // ESP_LOGI(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
                 break;
         }
     }
@@ -1047,11 +1052,11 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
         const char * c = 0;
         switch(id) {
             case GPS_LOG_EVENT_LOG_FILES_OPENED:
-                ESP_LOGI(TAG, "[%s] GPS_LOG_EVENT_LOG_FILES_OPENED", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, gps_log_event_strings[id]);
                 goto printfiles;
                 break;
             case GPS_LOG_EVENT_LOG_FILES_OPEN_FAILED:
-                ESP_LOGI(TAG, "[%s] GPS_LOG_EVENT_LOG_FILES_OPEN_FAILED", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, gps_log_event_strings[id]);
                 printfiles:
                 for(uint8_t i=0; i<SD_FD_END; i++) {
                     printf("** [%s] ", i==SD_GPX ? "GPX" : i==SD_GPY ? "GPY" : i==SD_SBP ? "SBP" : i==SD_UBX ? "UBX" : i==SD_TXT ? "TXT" : "-");
@@ -1066,13 +1071,13 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
                 }
                 break;
             case GPS_LOG_EVENT_LOG_FILES_SAVED:
-                ESP_LOGI(TAG, "[%s] GPS_LOG_EVENT_LOG_FILES_SAVED", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, gps_log_event_strings[id]);
                 break;
             case GPS_LOG_EVENT_LOG_FILES_CLOSED:
-                ESP_LOGI(TAG, "[%s] GPS_LOG_EVENT_LOG_FILES_CLOSED", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, gps_log_event_strings[id]);
                 break;
             default:
-                ESP_LOGI(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+                // ESP_LOGI(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
                 break;
         }
     }
@@ -1082,24 +1087,24 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
                 //ESP_LOGI(TAG, "[%s] ADC_EVENT_VOLTAGE_UPDATE", __FUNCTION__);
                 break;
             case ADC_EVENT_BATTERY_LOW:
-                ESP_LOGI(TAG, "[%s] ADC_EVENT_BATTERY_LOW", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, adc_event_strings[id]);
                 break;
             case ADC_EVENT_BATTERY_OK:
-                ESP_LOGI(TAG, "[%s] ADC_EVENT_BATTERY_OK", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, adc_event_strings[id]);
                 break;
             default:
-                ESP_LOGI(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+                // ESP_LOGI(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
                 break;
         }
     }
     else if(base == WIFI_EVENT) {
         switch(id) {
             case WIFI_EVENT_AP_START:
-                ESP_LOGI(TAG, "[%s] WIFI_EVENT_AP_START", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
                 http_start_webserver();
                 break;
             case WIFI_EVENT_AP_STOP:
-                ESP_LOGI(TAG, "[%s] WIFI_EVENT_AP_STOP", __FUNCTION__);
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
                 http_stop_webserver();
                 break;
             default:
