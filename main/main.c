@@ -362,8 +362,8 @@ esp_err_t ubx_msg_do(ubx_msg_byte_ctx_t *mctx) {
                     }
 
                     ubx_set_time(ubx, m_context.config->timezone);
-                    int32_t avg_speed = 0;
                     if (!gps->files_opened && ubx->signal_ok && (gps->GPS_delay > (TIME_DELAY_FIRST_FIX * ubx->rtc_conf->output_rate))) {  // vertraging Gps_time_set is nu 10 s!!
+                        int32_t avg_speed = 0;
                         avg_speed = (avg_speed + nav_pvt->gSpeed * 19) / 20;  // FIR filter gem. snelheid laatste 20 metingen in mm/s
                         //printf("[%s] GPS avg gSpeed: %"PRId32", start logging when min is %d\n", __FUNCTION__, avg_speed, MIN_SPEED_START_LOGGING);
                         if (avg_speed > 1000) { // 1 m/s == 3.6 km/h
@@ -398,7 +398,7 @@ esp_err_t ubx_msg_do(ubx_msg_byte_ctx_t *mctx) {
                             gps->Ublox.run_start_time = 0;
                         }
                         //saved_count++;
-                        if (avg_speed > 1000) // log only when speed is above 1 m/s == 3.6 km/h
+                        if (gps->gps_speed > 1000) // log only when speed is above 1 m/s == 3.6 km/h
                             log_to_file(gps);  // here it is also printed to serial !!
                         push_gps_data(gps, &gps->Ublox, nav_pvt->lat / 10000000.0f, nav_pvt->lon / 10000000.0f, gps->gps_speed);
                         gps->run_count = New_run_detection(gps, nav_pvt->heading / 100000.0f, gps->S2.avg_s);
