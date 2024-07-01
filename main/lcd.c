@@ -80,7 +80,7 @@ static esp_err_t reset_display_state(struct display_state_s *display_state) {
 
 static uint32_t _boot_screen(const struct display_s *me) {
     TIMER_S
-    if (_lvgl_lock(100)) {
+    if (_lvgl_lock(0)) {
         //driver_st7789_bl_set(75);
         // lv_scr_load(UI_INFO_SCREEN);
 
@@ -97,19 +97,22 @@ static uint32_t _boot_screen(const struct display_s *me) {
 static uint32_t _off_screen(const struct display_s *me, int choice) {
     TIMER_S
     int ret = 3000;
-    if (_lvgl_lock(-1)) {
+    if (_lvgl_lock(0)) {
         uint32_t milli = get_millis();
         float session_time = (milli - m_context.gps.start_logging_millis) / 1000;
-        const char *title = m_context.request_restart ? "Reboot device" : m_context.Shut_down_Save_session ? "Saving session" : "Going to sleep";
+        const char *title = m_context.request_restart ? "Reboot device" : m_context.Shut_down_Save_session ? 0 : "Going to sleep";
         if (session_time > 0) {
             ESP_LOGD(TAG, "session time: %.2f s", session_time);
         }
         // lv_scr_load(UI_INFO_SCREEN);
 
-        if(m_context.low_bat_count > 10) {
+        if(m_context.low_bat_count > 5) {
             showLowBatScreen();
         } else {
-            showBootScreen(title);
+            if(!title)
+                showSaveSessionScreen(title);
+            else
+                showBootScreen(title);
         }
         _lvgl_unlock();
     }
@@ -147,7 +150,7 @@ static uint32_t _sleep_screen(const struct display_s *me, int choice) {
     TIMER_S
     char tmp[24], *p = tmp;
     lv_label_t *panel;
-    if (_lvgl_lock(-1)) {
+    if (_lvgl_lock(50)) {
         showSleepScreen();
         statusbar_update();
         for(int i = 0; i < 6; i++) {
@@ -669,16 +672,16 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
             if (!m_context.gps.ublox_config->ready){
                 memcpy(p, "gps fail", 8);
             }
-            else if(!m_context.gps.ublox_config->signal_ok) {
-                uint8_t qp = gblink;
-                memcpy(p, "gps   ", 6);
-                *(p+6)=0;
-                p += 3;
-                while(qp--) {
-                    *p++ = '.';
-                }
-                gblink = gblink==3 ? 0 : gblink+1;
-            }
+            // else if(!m_context.gps.ublox_config->signal_ok) {
+            //     uint8_t qp = gblink;
+            //     memcpy(p, "gps   ", 6);
+            //     *(p+6)=0;
+            //     p += 3;
+            //     while(qp--) {
+            //         *p++ = '.';
+            //     }
+            //     gblink = gblink==3 ? 0 : gblink+1;
+            // }
             else {
                 p += xltoa(m_context.gps.ublox_config->ubx_msg.navPvt.numSV, p);
                 *p = 0;
@@ -730,9 +733,10 @@ static void statusbar_update() {
 }
 
 static uint32_t _update_screen(const struct display_s *me, const screen_mode_t screen_mode, void *arg) {
-    uint32_t ret = 100;
-    if (_lvgl_lock(ret)) {
-        // TIMER_S
+    uint32_t ret = 50;
+    UNUSED_PARAMETER(ret);
+    if (_lvgl_lock(0)) {
+        TIMER_S
         // char sz[64];
         logger_config_t *config = m_context.config;
         char tmp[24] = {0}, *p = tmp, tmpb[24]={0}, *pb = tmpb;
@@ -804,7 +808,10 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 me->self->state.update_delay = 100;
                 showPushScreen(state);
                 break;
-            case SCREEN_MODE_GO_SLEEP:
+            case SCREEN_MODE_SD_TROUBLE:
+                showSdTroubleScreen(state);
+                break;
+            case SCREEN_MODE_SHUT_DOWN:
                 ui_flush_screens(&ui_init_screen.screen);
                 me->self->state.update_delay = _off_screen(me, 0);
                 break;

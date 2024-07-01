@@ -46,6 +46,9 @@
 #include "driver_vendor.h"
 #include "esp_wifi.h"
 
+#include "dstat_screens.h"
+#include "display.h"
+
 // events
 #include "adc_events.h"
 #include "button_events.h"
@@ -53,7 +56,7 @@
 #include "gps_log_events.h"
 #include "logger_events.h"
 #include "ubx_events.h"
-#include "dstat_screens.h"
+#include "ui_events.h"
 
 ESP_EVENT_DEFINE_BASE(LOGGER_EVENT);
 TIMER_INIT
@@ -100,9 +103,16 @@ bool g_master_log_level = ESP_LOG_INFO;
 
 struct display_s display;
 static esp_err_t events_uninit();
+esp_timer_handle_t screen_periodic_timer = 0;
+esp_timer_handle_t button_timer = 0;
+static int screen_cb_loop = 0;
+static void screen_cb(void* arg);
+
+static SemaphoreHandle_t lcd_refreshing_sem = NULL;
 
 static void low_to_sleep(uint64_t sleep_time) {
     LOGR
+    delay_ms(10000);
     if (_lvgl_lock(-1)) {
         gpio_set_direction((gpio_num_t)13, (gpio_mode_t)GPIO_MODE_OUTPUT);
         gpio_set_level((gpio_num_t)13, 1);  // flash in deepsleep, CS stays HIGH!!
@@ -115,9 +125,8 @@ static void low_to_sleep(uint64_t sleep_time) {
     // display_uninit(&display);
 
     ESP_LOGI(TAG, "Setup ESP32 to sleep for every %d Seconds", (int)sleep_time);
+    //delay_ms(250);
     ESP_LOGI(TAG, "Going to sleep now");
-
-    delay_ms(3000);
     esp_deep_sleep(uS_TO_S_FACTOR * sleep_time);
 }
 
@@ -136,37 +145,38 @@ static void update_bat(uint8_t verbose) {
 /*
 Method to print the reason by which ESP32 has been awaken from sleep
 */
-static int print_wakeup_reason() {
+
+static char * wakeup_reasons[] = {
+    0, 0,
+    "ESP_SLEEP_WAKEUP_EXT0",
+    "ESP_SLEEP_WAKEUP_EXT1",
+    "ESP_SLEEP_WAKEUP_TIMER",
+    "ESP_SLEEP_WAKEUP_TOUCHPAD",
+    "ESP_SLEEP_WAKEUP_ULP",
+    "ESP_SLEEP_WAKEUP_OTHER",
+};
+static bool screen_from_wakeup = false;
+static int wakeup_init() {
     int ret = 0;
     TIMER_S
     esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
-    // if (!m_context_rtc.rtc_initialized) {
-    //     goto wakeup_done;
-    // }
-    update_bat(1);
+
+    // First screen update call from wakeup
+    if(wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) 
+    // screen_cb(&display);
 
     if (m_context_rtc.RTC_voltage_bat < MINIMUM_VOLTAGE) {
-        if(display.op)
-            ret += display.op->boot_screen(&display);
-        delay_ms(ret);
-        if(display.op)
-            display.op->sleep_screen(&display, m_context_rtc.RTC_SLEEP_screen);
+        lowbat:
         esp_sleep_enable_ext0_wakeup(WAKE_UP_GPIO, 0);
-        low_to_sleep(4000);
+        low_to_sleep(TIME_TO_SLEEP);
+        goto done;
     }
 
     switch (wakeup_reason) {
         case ESP_SLEEP_WAKEUP_EXT0:
-            ESP_LOGI(TAG, "Wakeup caused by external signal using RTC_IO");
+            ESP_LOGI(TAG, "%s", wakeup_reasons[wakeup_reason]);
             gpio_set_direction((gpio_num_t)WAKE_UP_GPIO, GPIO_MODE_INPUT);
             gpio_set_pull_mode((gpio_num_t)WAKE_UP_GPIO, GPIO_PULLUP_ONLY);
-            /* while (millis < 200) {
-                if (gpio_get_level((gpio_num_t)WAKE_UP_GPIO) == 1) {
-                    esp_sleep_enable_ext0_wakeup(WAKE_UP_GPIO, 0);  // was 39  1 = High, 0 = Low
-                    low_to_sleep(TIME_TO_SLEEP);
-                    break;
-                }
-            } */
             rtc_gpio_deinit(WAKE_UP_GPIO);  // was 39
             m_context.reed = 1;
             esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
@@ -174,29 +184,27 @@ static int print_wakeup_reason() {
             delay_ms(ret); */
             break;
         case ESP_SLEEP_WAKEUP_EXT1:
-            ESP_LOGI(TAG, "Wakeup caused by external signal using RTC_CNTL");
+            ESP_LOGI(TAG, "%s", wakeup_reasons[wakeup_reason]);
             break;
         case ESP_SLEEP_WAKEUP_TIMER:
-            ESP_LOGI(TAG, "Wakeup caused by timer");
-            update_bat(0);
-            esp_sleep_enable_ext0_wakeup(WAKE_UP_GPIO, 0);  // was 39  1 = High, 0 = Low
-            if(display.op)
-                display.op->sleep_screen(&display, m_context_rtc.RTC_SLEEP_screen);
-            low_to_sleep(TIME_TO_SLEEP);  // was 4000
+            ESP_LOGI(TAG, "%s", wakeup_reasons[wakeup_reason]);
+            app_mode = APP_MODE_SLEEP;
+            // screen_cb(&display);
+            goto lowbat;
             break;
         case ESP_SLEEP_WAKEUP_TOUCHPAD:
-            ESP_LOGI(TAG, "Wakeup caused by touchpad");
+            ESP_LOGI(TAG, "%s", wakeup_reasons[wakeup_reason]);
             break;
         case ESP_SLEEP_WAKEUP_ULP:
-            ESP_LOGI(TAG, "Wakeup caused by ULP program");
+            ESP_LOGI(TAG, "%s", wakeup_reasons[wakeup_reason]);
             break;
         default:
-        //wakeup_done:
-            ESP_LOGI(TAG, "Wakeup was not caused by deep sleep, reason int: %d", wakeup_reason);
+            ESP_LOGI(TAG, "%s int: %d", wakeup_reasons[7], wakeup_reason);
             /* ret += Boot_screen();
             delay_ms(ret); */
             break;
     }
+    done:
     TIMER_E
     return ret;
 }
@@ -519,11 +527,30 @@ static cur_screens_t next_screen = CUR_SCREEN_NONE;
 static bool button_down = false;
 static int button_time = -1;
 static uint8_t stat_screen_count = 0;
+ // 200ms before exec cb
+#define BUTTON_CB_WAIT_BEFORE 210000
+
+static void button_timer_cb(void *arg) {
+    LOGR
+    if(cur_screen == CUR_SCREEN_GPS_SPEED && m_context.gps.ublox_config->signal_ok) {
+        ESP_LOGI(TAG, "gps info next screen requested, cur: %hhu", m_context.config->speed_field);
+        m_context.config->speed_field++;
+        if (m_context.config->speed_field >= m_context.config->speed_field_count)
+            m_context.config->speed_field = 0;
+        m_context.Field_choice = 1;
+    }
+    else if(cur_screen==CUR_SCREEN_GPS_STATS) {
+        ESP_LOGI(TAG, "next screen requested, cur: %hhu", m_context.stat_screen_cur);
+        m_context.stat_screen_cur++;
+        stat_screen_count = get_stat_screens_count();
+    }
+}
 
 static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
     uint32_t tm = time/1000;
     l_button_t *btn = 0;
-    ESP_LOGI(TAG, "Button %d event: %d, time: %ld ms", num, ev, tm);
+    LOGR
+    //ESP_LOGI(TAG, "Button %d event: %d, time: %ld ms", num, ev, tm);
     switch (ev) {
     case L_BUTTON_UP:
         button_down = false;
@@ -538,24 +565,11 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
                 }
             }
             else if (tm >= CONFIG_BTN_GPIO_INPUT_LONG_PRESS_TIME_MS) {
-                app_mode = APP_MODE_SLEEP;
+                app_mode = APP_MODE_SHUT_DOWN;
                 m_context.long_push = 1;
             }
             else {
-                if (m_context.gps.ublox_config->ready && m_context.gps.ublox_config->signal_ok) {
-                    if(cur_screen == CUR_SCREEN_GPS_SPEED) {
-                        ESP_LOGI(TAG, "gps info next screen requested, cur: %hhu", m_context.config->speed_field);
-                        m_context.config->speed_field++;
-                        if (m_context.config->speed_field >= m_context.config->speed_field_count)
-                            m_context.config->speed_field = 0;
-                        m_context.Field_choice = 1;
-                    }
-                    else if(cur_screen==CUR_SCREEN_GPS_STATS) {
-                        ESP_LOGI(TAG, "next screen requested, cur: %hhu", m_context.stat_screen_cur);
-                        m_context.stat_screen_cur++;
-                        stat_screen_count = get_stat_screens_count();
-                    }
-                }
+                esp_timer_start_once(button_timer, BUTTON_CB_WAIT_BEFORE);
             }
 #ifdef CONFIG_BTN_GPIO_INPUT_1_ACTIVE
         } else if(num==1) {
@@ -580,6 +594,10 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
         }
         break;
     case L_BUTTON_DOWN:
+        if(esp_timer_is_active(button_timer)){
+            ESP_LOGI(TAG,"cancel timer 2");
+            esp_timer_stop(button_timer);
+        }
         button_down = true;
         button_time = 0;
         break;
@@ -594,148 +612,176 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
         else
             button_time = 2;
         break;
+    case L_BUTTON_DOUBLE_CLICK:
+        ESP_LOGI(TAG, "Button %d double click requested.", num);
+        if(esp_timer_is_active(button_timer)){
+            ESP_LOGI(TAG,"cancel timer 3");
+            esp_timer_stop(button_timer);
+            if (app_mode == APP_MODE_GPS) {
+                if(next_screen==CUR_SCREEN_NONE) {
+                    next_screen = CUR_SCREEN_GPS_INFO;
+                }
+                else if(next_screen==CUR_SCREEN_GPS_INFO) {
+                    next_screen = CUR_SCREEN_GPS_STATS;
+                }
+                else
+                    next_screen = CUR_SCREEN_NONE;
+            }
+        }
+        break;
     default:
         break;
     }
 }
 
-// uint32_t time_to_next_sec = 0;
-static void screenTask(void *parameter) {
-    //LOGR
-    int wifistatus;
-    bool screen_active = true;
-    int32_t now, emillis, elapsed;
-    uint32_t loops = 0, delay = 0, next_screen_time = 0;
-    m_context.boot_screen_stage = 1;
+static void screen_cb(void* arg) {
+    LOGR
+    if(xSemaphoreTake(lcd_refreshing_sem, 0) != pdTRUE)
+        return;
+    struct display_s *display = (struct display_s *)arg;
+    uint32_t delay=0;
+    if(!display || !display->op) {
+        return;
+    }
+    cur_screen = CUR_SCREEN_NONE;
     stat_screen_count = m_context.stat_screen_count;
     if (stat_screen_count > get_stat_screens_count())
         stat_screen_count = get_stat_screens_count();
-    task_memory_info("screenTask");
-    while (screen_active) {
-        now = get_millis();
-        elapsed = 0;
-        
-        if (next_screen_time <= now) {
-            if (loops++ > 100) {
-#ifdef DEBUG
-               task_memory_info("screenTask");
-#endif          
-                loops = 0;
-                //verbose = 1;
-            } else {
-                //verbose = 0;
-            }
-            if(!display.op) {
-                delay_ms(100);
-                continue;
-            }
-            if(button_down) {
-                if(button_time > 0 || (button_time == 0 && display.op && cur_screen!=CUR_SCREEN_GPS_SPEED && cur_screen!=CUR_SCREEN_GPS_STATS)) {
-                    if(button_time > 0 || (button_time == 0 && btns[0].button_down)){
-                        delay = display.op->update_screen(&display, SCREEN_MODE_PUSH, (void*)button_time);
-                        delay_ms(delay >= 50 ? 0 : 50-delay);
-                        continue;
-                    }
-                }
-            }
+    display_op_t *op = display->op;
+    int32_t now, emillis, elapsed;
+    if(button_down) {
+        if(button_time > 0 && btns[0].button_down) {
+            delay = op->update_screen(display, SCREEN_MODE_PUSH, (void*)button_time);
+            goto end;
+        }
+    }
 
-            // esp_event_post(LOGGER_EVENT, LOGGER_EVENT_SCREEN_UPDATE_BEGIN, NULL, 0, portMAX_DELAY);
-            //ESP_LOGW(TAG, "[%s] --- going to update screen ---", __FUNCTION__);
-            update_bat(0);
+    update_bat(0);
 
-            if (m_context_rtc.RTC_voltage_bat < MINIMUM_VOLTAGE) {
-                m_context.low_bat_count++;
-            } else {
-                m_context.low_bat_count = 0;
-            }
+    if(m_context_rtc.RTC_voltage_bat < MINIMUM_VOLTAGE && app_mode == APP_MODE_BOOT)
+        m_context.low_bat_count = 10;
+    if (m_context_rtc.RTC_voltage_bat < MINIMUM_VOLTAGE) {
+        m_context.low_bat_count++;
+    } else {
+        m_context.low_bat_count = 0;
+    }
 #if defined(CONFIG_DISPLAY_DRIVER_ST7789)
             if(m_context.display_bl_level!=m_context.display_bl_level_set){
                 m_context.display_bl_level_set = m_context.display_bl_level_set > 100 ? 100 : m_context.display_bl_level_set;
-                //ESP_LOGW(TAG, "[%s] --- dim blacklight from %"PRIu8"%% to %"PRIu8"%% ---", __FUNCTION__, m_context.display_bl_level, m_context.display_bl_level_set);
-                /* while(m_context.display_bl_level != m_context.display_bl_level_set) {
-                    if(m_context.display_bl_level < m_context.display_bl_level_set) ++m_context.display_bl_level;
-                    else --m_context.display_bl_level;
-                    driver_st7789_bl_set(m_context.display_bl_level);
-                    delay_ms(2);
-                } */
                 m_context.display_bl_level = m_context.display_bl_level_set;
                 driver_st7789_bl_set(m_context.display_bl_level);
                 delay_ms(2);
             }
 #endif  
-            if (app_mode == APP_MODE_SLEEP || app_mode == APP_MODE_RESTART) {
-                    delay = display.op->off_screen(&display, m_context_rtc.RTC_OFF_screen);
-                // delay = Shut_down();
-                screen_active = false;
-            } else if (m_context.boot_screen_stage || app_mode <= APP_MODE_BOOT) {
-                    delay = display.op->boot_screen(&display);
-                m_context.boot_screen_stage = m_context.boot_screen_stage > 4 ? 0 : m_context.boot_screen_stage + 1;
-            } else if (m_context.low_bat_count > 6) { // 6 * 10sec = 1 min
-                m_context_rtc.RTC_OFF_screen = 1;  // Simon screen with info text !!!
-                    delay = display.op->off_screen(&display, m_context_rtc.RTC_OFF_screen);
-                app_mode = APP_MODE_SLEEP;
-                screen_active = false;
-            } else if (app_mode == APP_MODE_WIFI) {
-                wifistatus = wifi_status();
-                if (wifistatus < 1) {
-                    delay = display.op->update_screen(&display, SCREEN_MODE_WIFI_START, 0);
-                } else if (wifistatus == 1) {
-                    delay = display.op->update_screen(&display, SCREEN_MODE_WIFI_STATION, 0);
-                } else {
-                    delay = display.op->update_screen(&display, SCREEN_MODE_WIFI_AP, 0);
-                }
-            } else if (app_mode == APP_MODE_GPS) {
-                if (!m_context.gps.ublox_config->ready || (m_context.gps.gps_speed < 1000 && next_screen == CUR_SCREEN_GPS_INFO)) {
-                    delay = display.op->update_screen(&display, SCREEN_MODE_GPS_INIT, 0);
-                    cur_screen = CUR_SCREEN_GPS_INFO;
-                }
-/* #if defined(GPIO12_ACTIF)
-                // else if(Short_push12.long_pulse)
-                else if (m_context.Field_choice2) {  //! io12_short_pulse
-                    delay = display.op->update_screen(&display, m_context.gpio12_screen[m_context.gpio12_screen_cur], 0);
-                }  // heeft voorrang, na drukken GPIO_pin 12, 10 STAT4 scherm !!!
-#endif */       
-                else if ((m_context.gps.gps_speed / 1000.0f < m_context.config->stat_speed) && (m_context.gps.S2.display_max_speed  > 1000)) { // lower than 5 km/h
-                    if (m_context.stat_screen_cur >= stat_screen_count) {
-                        m_context.stat_screen_cur = 0;  // screen_count = 2
-                    }
-                    const uint8_t sc = (m_context.stat_screen_cur >= m_context.stat_screen_count) ? m_context.stat_screen_cur+1 : m_context.stat_screen[m_context.stat_screen_cur];
-                    delay = display.op->update_screen(&display, sc, 0);
-                    cur_screen = CUR_SCREEN_GPS_STATS;
-                } else if (m_context.gps.ublox_config->signal_ok && (m_context.gps.ublox_config->ubx_msg.navPvt.iTOW - m_context.gps.old_nav_pvt_itow) > (m_context.gps.time_out_gps_msg * 5)) {
-                    delay = display.op->update_screen(&display, SCREEN_MODE_GPS_TROUBLE, 0);  // gps signal lost !!!
-                    cur_screen = CUR_SCREEN_GPS_TROUBLE;
-                } else {
-                    if (m_context.config->speed_large_font == 2) {
-                            delay = display.op->update_screen(&display, SCREEN_MODE_SPEED_2, 0);
-                    } else {
-                        if(display.op)
-                            delay = display.op->update_screen(&display, SCREEN_MODE_SPEED_1, 0);
-                    }
-                    m_context.stat_screen_cur = 0;
-                    stat_screen_count = m_context.stat_screen_count;
-                    cur_screen = CUR_SCREEN_GPS_SPEED;
-                }
-            }
-            emillis = get_millis();
-            elapsed = emillis - now;
-            if (button_down) {
-                 next_screen_time = emillis + 50;
-            } else {
-                next_screen_time = emillis + ((delay > 99) ? 100 : delay) - elapsed;
-            }
-            // esp_event_post(LOGGER_EVENT, LOGGER_EVENT_SCREEN_UPDATE_END, &elapsed, sizeof(int32_t), portMAX_DELAY);
-        }
-// #if defined(CONFIG_DISPLAY_USE_LVGL)
-//         lcd_lv_timer_handler();
-// #endif
-        if (elapsed < 51)
-            delay_ms(50 - elapsed);
+    if(app_mode == APP_MODE_SLEEP){
+        delay = op->sleep_screen(display, 0);
     }
-    vTaskDelete(NULL);
-    t2 = 0;
-    ESP_LOGI(TAG, "[%s] ended", __FUNCTION__);
+    if (app_mode == APP_MODE_SHUT_DOWN || app_mode == APP_MODE_RESTART) {
+            delay = op->off_screen(display, m_context_rtc.RTC_OFF_screen);
+        // delay = Shut_down();
+        // screen_active = false;
+    } else if (m_context.boot_screen_stage || app_mode <= APP_MODE_BOOT) {
+            delay = op->boot_screen(display);
+        m_context.boot_screen_stage = m_context.boot_screen_stage > 4 ? 0 : m_context.boot_screen_stage + 1;
+    } else if (m_context.low_bat_count > 6) { // 6 * 10sec = 1 min
+        m_context_rtc.RTC_OFF_screen = 1;  // Simon screen with info text !!!
+        delay = op->off_screen(display, m_context_rtc.RTC_OFF_screen);
+        app_mode = APP_MODE_SHUT_DOWN;
+        // screen_active = false;
+    } else if (app_mode == APP_MODE_WIFI) {
+        int wifistatus = wifi_status();
+        if(!m_context.sdOK) {
+            delay = op->update_screen(display, SCREEN_MODE_SD_TROUBLE, 0);
+        }
+        else if (wifistatus < 1) {
+            delay = op->update_screen(display, SCREEN_MODE_WIFI_START, 0);
+        } else if (wifistatus == 1) {
+            delay = op->update_screen(display, SCREEN_MODE_WIFI_STATION, 0);
+        } else {
+            delay = op->update_screen(display, SCREEN_MODE_WIFI_AP, 0);
+        }
+    } else if (app_mode == APP_MODE_GPS) {
+        bool run_is_active = (m_context.gps.gps_speed / 1000.0f >= m_context.config->stat_speed);
+        if (run_is_active && next_screen != CUR_SCREEN_NONE)
+            next_screen = CUR_SCREEN_NONE;
+
+        if(!m_context.sdOK && next_screen == CUR_SCREEN_NONE) {
+            // sd card trouble!!!
+            delay = op->update_screen(display, SCREEN_MODE_SD_TROUBLE, 0);
+        }
+        else if (m_context.gps.ublox_config->signal_ok && (m_context.gps.ublox_config->ubx_msg.navPvt.iTOW - m_context.gps.old_nav_pvt_itow) > (m_context.gps.time_out_gps_msg * 5) && next_screen == CUR_SCREEN_NONE) {
+            // gps signal lost!!!
+            delay = op->update_screen(display, SCREEN_MODE_GPS_TROUBLE, 0);  // gps signal lost !!!
+            cur_screen = CUR_SCREEN_GPS_TROUBLE;
+        } else if (!m_context.gps.ublox_config->ready || (!run_is_active  && next_screen == CUR_SCREEN_GPS_INFO)) {
+            // gps not ready jet!!!
+            delay = op->update_screen(display, SCREEN_MODE_GPS_INIT, 0);
+            cur_screen = CUR_SCREEN_GPS_INFO;
+        }
+/* #if defined(GPIO12_ACTIF)
+        // else if(Short_push12.long_pulse)
+        else if (m_context.Field_choice2) {  //! io12_short_pulse
+            delay = op->update_screen(display, m_context.gpio12_screen[m_context.gpio12_screen_cur], 0);
+        }  // heeft voorrang, na drukken GPIO_pin 12, 10 STAT4 scherm !!!
+#endif */       
+        else if (!run_is_active && (m_context.gps.S2.display_max_speed  > 1000 || next_screen == CUR_SCREEN_GPS_STATS)) { 
+            // lower than 5 km/h
+            if (m_context.stat_screen_cur >= stat_screen_count) {
+                m_context.stat_screen_cur = 0;  // screen_count = 2
+            }
+            const uint8_t sc = (m_context.stat_screen_cur >= m_context.stat_screen_count) ? m_context.stat_screen_cur+1 : m_context.stat_screen[m_context.stat_screen_cur];
+            delay = op->update_screen(display, sc, 0);
+            cur_screen = CUR_SCREEN_GPS_STATS;
+        } else {
+            if (m_context.config->speed_large_font == 2) {
+                    delay = op->update_screen(display, SCREEN_MODE_SPEED_2, 0);
+            } else {
+                if(op)
+                    delay = op->update_screen(display, SCREEN_MODE_SPEED_1, 0);
+            }
+            m_context.stat_screen_cur = 0;
+            stat_screen_count = m_context.stat_screen_count;
+            cur_screen = CUR_SCREEN_GPS_SPEED;
+        }
+    }
+    end:
+    UNUSED_PARAMETER(delay);
+    xSemaphoreGive(lcd_refreshing_sem);
+    //delay_ms(delay >= 50 ? 0 : 50-delay);
 }
+
+// uint32_t time_to_next_sec = 0;
+// static void screenTask(void *parameter) {
+//     //LOGR
+//     int wifistatus;
+//     bool screen_active = true;
+//     int32_t now, emillis, elapsed;
+//     uint32_t loops = 0, delay = 0, next_screen_time = 0;
+//     m_context.boot_screen_stage = 1;
+//     task_memory_info("screenTask");
+//     while (screen_active) {
+//         now = get_millis();
+//         elapsed = 0;
+//         delay = 0;
+        
+//         if (next_screen_time <= now) {
+            
+//             // esp_event_post(LOGGER_EVENT, LOGGER_EVENT_SCREEN_UPDATE_END, &elapsed, sizeof(int32_t), portMAX_DELAY);
+//         }
+//         emillis = get_millis();
+//         elapsed = emillis - now;
+//         if (button_down) {
+//                 next_screen_time = emillis + 50;
+//         } else {
+//             next_screen_time = emillis + ((delay > 99) ? 100 : delay) - elapsed;
+//         }
+//         if (elapsed < 51)
+//             delay_ms(50 - elapsed);
+//     }
+//     vTaskDelete(NULL);
+//     t2 = 0;
+//     ESP_LOGI(TAG, "[%s] ended", __FUNCTION__);
+// }
 
 #if defined(USE_WDT)
 #ifdef USE_OLD_WDT
@@ -858,6 +904,10 @@ void wifiTask() {
     uint32_t loops = 0;
     task_memory_info("wifiTask");
     while (app_mode == APP_MODE_WIFI) {
+        if (m_context.gps.ublox_config->ready) {
+            shut_down_gps(1);
+            ubx_off(m_context.gps.ublox_config);
+        }
         if (loops++ > 100) {
 #ifdef DEBUG
                task_memory_info("wifiTask");
@@ -892,10 +942,6 @@ void app_mode_wifi_handler(int verbose) {
     app_mode = APP_MODE_WIFI;
     app_mode_wifi_on = 1;
     // m_context.NTP_time_set = 0;
-    if (m_context.gps.ublox_config->ready) {
-        shut_down_gps(1);
-        ubx_off(m_context.gps.ublox_config);
-    }
     if (!wifi_context.Wifi_on) {
         ESP_LOGI(TAG, "[%s] first turn wifi on", __FUNCTION__);
         wifi_init();
@@ -939,12 +985,12 @@ void app_mode_gps_handler(int verbose) {
     // Create RTOS task, so logging and e-paper update are separated (update
     // e-paper is blocking, 800 ms !!)
     task_memory_info("gpsStarter-main");
-    xTaskCreate(gpsTask,   /* Task function. */
+    xTaskCreatePinnedToCore(gpsTask,   /* Task function. */
                 "gpsTask", /* String with name of task. */
                 CONFIG_GPS_LOG_STACK_SIZE,  /* Stack size in bytes. */
                 NULL,      /* Parameter passed as input of the task */
                 5,         /* Priority of the task. */
-                &t1);      /* Task handle. */
+                &t1, 1);      /* Task handle. */
     //ESP_LOGI(TAG, "Created GPS task");
     TIMER_E
 }
@@ -952,7 +998,7 @@ void app_mode_gps_handler(int verbose) {
 void task_app_mode_handler(int verbose) {
     switch (app_mode) {
         case APP_MODE_RESTART:
-        case APP_MODE_SLEEP:
+        case APP_MODE_SHUT_DOWN:
             app_mode_wifi_on = 0;
             app_mode_gps_on = 0;
             if (app_mode != APP_MODE_RESTART) {
@@ -1123,7 +1169,19 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
                 http_stop_webserver();
                 break;
             default:
-                // ESP_LOGI(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+                break;
+        }
+    }
+    else if(base == UI_EVENT) {
+        switch(id) {
+            case UI_EVENT_FLUSH_START:
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, ui_event_strings[id]);
+                break;
+            case UI_EVENT_FLUSH_DONE:
+                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, ui_event_strings[id]);
+                screen_cb(&display);
+                break;
+            default:
                 break;
         }
     }
@@ -1164,19 +1222,26 @@ static esp_err_t events_uninit() {
 
 static void setup(void) {
     TIMER_S
+    app_mode = APP_MODE_BOOT;
     int ret = 0;
+
 #if defined(CONFIG_IDF_TARGET_ESP32S3)
     init_power();
 #endif
+
     events_init();
     init_adc();
+
 #if defined(USE_WDT)
     init_watchdog();
 #endif
+
+    lcd_refreshing_sem = xSemaphoreCreateBinary();
+    xSemaphoreGive(lcd_refreshing_sem);
     display_init(&display);
     //g_context_rtc_defaults(&m_context_rtc);  // init rtc battery state before wakeup
 
-    print_wakeup_reason();  // Print the wakeup reason for ESP32, go back to sleep is timer is wake-up source !
+    wakeup_init();  // Print the wakeup reason for ESP32, go back to sleep is timer is wake-up source !
 
     init_button();
 #ifdef CONFIG_USE_FATFS
@@ -1216,8 +1281,7 @@ static void setup(void) {
     */
     }
     // appstage 1, structures initialized, start gps.
-    app_mode = APP_MODE_BOOT;
-
+    
     delay_ms(50);
     ret += 50;
 
@@ -1240,12 +1304,21 @@ static void setup(void) {
     ESP_LOGW(TAG, "[%s] build debug mode not set.", __FUNCTION__);
 #endif
     task_memory_info("screenStarter-main");
-    xTaskCreatePinnedToCore(screenTask,   /* Task function. */
-                "screenTask", /* String with name of task. */
-                CONFIG_DISPLAY_TASK_STACK_SIZE,    /* Stack size in bytes was 10000, but stack overflow on task 2 ?????? now 20000. */
-                NULL,            /* Parameter passed as input of the task */
-                5,               /* Priority of the task. */
-                &t2, 1);         /* Task handle. */
+    // xTaskCreate(screenTask,   /* Task function. */
+    //             "screenTask", /* String with name of task. */
+    //             CONFIG_DISPLAY_TASK_STACK_SIZE,    /* Stack size in bytes was 10000, but stack overflow on task 2 ?????? now 20000. */
+    //             NULL,            /* Parameter passed as input of the task */
+    //             5,               /* Priority of the task. */
+    //             &t2);         /* Task handle. */
+
+    const esp_timer_create_args_t screen_periodic_timer_args = {
+        .callback = &screen_cb,
+        .name = "scr_tmr",
+        .arg = &display
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&screen_periodic_timer_args, &screen_periodic_timer));
+    ESP_LOGI(TAG, "[%s] start screen timer.", __FUNCTION__);
+    ESP_ERROR_CHECK(esp_timer_start_periodic(screen_periodic_timer, 500000)); // 500ms
 
 #ifdef GPS_TIMER_STATS
     const esp_timer_create_args_t gps_periodic_timer_args = {
@@ -1255,6 +1328,13 @@ static void setup(void) {
     };
     ESP_ERROR_CHECK(esp_timer_create(&gps_periodic_timer_args, &gps_periodic_timer));
 #endif
+
+    const esp_timer_create_args_t button_timer_args = {
+        .callback = &button_timer_cb,
+        .name = "btn_tmr",
+        .arg = 0
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&button_timer_args, &button_timer));
     TIMER_E
 }
 
@@ -1312,8 +1392,15 @@ void app_main(void) {
     littlefs_deinit();
 #endif
 #ifdef GPS_TIMER_STATS
-    ESP_ERROR_CHECK(esp_timer_delete(gps_periodic_timer));
+    if(gps_periodic_timer)
+        ESP_ERROR_CHECK(esp_timer_delete(gps_periodic_timer));
 #endif
+    if(screen_periodic_timer)
+        ESP_ERROR_CHECK(esp_timer_delete(screen_periodic_timer));
+    vSemaphoreDelete(lcd_refreshing_sem);
+    lcd_refreshing_sem = NULL;
+    if(button_timer)
+        ESP_ERROR_CHECK(esp_timer_delete(button_timer));
     display_uninit(&display);
     config_delete(m_config);
     ubx_config_delete(m_context.gps.ublox_config);

@@ -35,6 +35,7 @@ typedef enum {
     APP_MODE_WIFI,
     APP_MODE_GPS,
     APP_MODE_SLEEP,
+    APP_MODE_SHUT_DOWN,
     APP_MODE_RESTART
 } app_mode_t;
 
