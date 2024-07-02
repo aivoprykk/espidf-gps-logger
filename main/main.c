@@ -105,6 +105,7 @@ struct display_s display;
 static esp_err_t events_uninit();
 esp_timer_handle_t screen_periodic_timer = 0;
 esp_timer_handle_t button_timer = 0;
+esp_timer_handle_t sd_timer = 0;
 static int screen_cb_loop = 0;
 static void screen_cb(void* arg);
 
@@ -112,22 +113,28 @@ static SemaphoreHandle_t lcd_refreshing_sem = NULL;
 
 static void low_to_sleep(uint64_t sleep_time) {
     LOGR
-    delay_ms(10000);
-    if (_lvgl_lock(-1)) {
-        gpio_set_direction((gpio_num_t)13, (gpio_mode_t)GPIO_MODE_OUTPUT);
-        gpio_set_level((gpio_num_t)13, 1);  // flash in deepsleep, CS stays HIGH!!
-        gpio_deep_sleep_hold_en();
-        esp_sleep_enable_timer_wakeup(uS_TO_S_FACTOR * sleep_time);
-        _lvgl_unlock();
-    }
+    gpio_set_direction((gpio_num_t)13, (gpio_mode_t)GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)13, 1);  // flash in deepsleep, CS stays HIGH!!
+    gpio_deep_sleep_hold_en();
+    esp_sleep_enable_timer_wakeup(uS_TO_S_FACTOR * sleep_time);
     events_uninit();
-    deinit_adc();
-    // display_uninit(&display);
-
-    ESP_LOGI(TAG, "Setup ESP32 to sleep for every %d Seconds", (int)sleep_time);
-    //delay_ms(250);
-    ESP_LOGI(TAG, "Going to sleep now");
-    esp_deep_sleep(uS_TO_S_FACTOR * sleep_time);
+    delay_ms(1500);
+    bool shutdown_progress = 1;
+    while(shutdown_progress){
+        if(_lvgl_lock(-1)){
+            deinit_adc();
+            esp_timer_stop(screen_periodic_timer);
+            esp_timer_stop(button_timer);
+            button_deinit();
+            _lvgl_unlock();
+            display_uninit(&display);
+            ESP_LOGI(TAG, "Setup ESP32 to sleep for every %d Seconds", (int)sleep_time);
+            //delay_ms(250);
+            ESP_LOGI(TAG, "Going to sleep now");
+            esp_deep_sleep(uS_TO_S_FACTOR * sleep_time);
+            shutdown_progress = 0;
+        }
+    }
 }
 
 static void update_bat(uint8_t verbose) {
@@ -226,8 +233,17 @@ static void go_to_sleep(uint64_t sleep_time) {
     }
     ubx_off(m_context.gps.ublox_config);
     write_rtc(&m_context_rtc);
+    sdcard_umount();
     sdcard_uninit();
-    button_deinit();
+#ifdef CONFIG_USE_FATFS
+    fatfs_uninit();
+#endif
+#ifdef CONFIG_USE_SPIFFS
+    spiffs_uninit();
+#endif
+#ifdef CONFIG_USE_LITTLEFS
+    littlefs_deinit();
+#endif    
     low_to_sleep(sleep_time);
 }
 
@@ -517,6 +533,8 @@ typedef enum {
     CUR_SCREEN_GPS_SPEED,
     CUR_SCREEN_GPS_INFO,
     CUR_SCREEN_GPS_TROUBLE,
+    CUR_SCREEN_SAVE_SESSION,
+    CUR_SCREEN_WIFI_INFO,
 } cur_screens_t;
 
 uint8_t app_mode_wifi_on = 0;
@@ -693,6 +711,8 @@ static void screen_cb(void* arg) {
         if(!m_context.sdOK) {
             delay = op->update_screen(display, SCREEN_MODE_SD_TROUBLE, 0);
         }
+        else if(next_screen==CUR_SCREEN_SAVE_SESSION)
+            delay = op->off_screen(display, m_context_rtc.RTC_OFF_screen);
         else if (wifistatus < 1) {
             delay = op->update_screen(display, SCREEN_MODE_WIFI_START, 0);
         } else if (wifistatus == 1) {
@@ -905,8 +925,13 @@ void wifiTask() {
     task_memory_info("wifiTask");
     while (app_mode == APP_MODE_WIFI) {
         if (m_context.gps.ublox_config->ready) {
+            if(m_context.gps.ublox_config->time_set)
+                next_screen = CUR_SCREEN_SAVE_SESSION;
             shut_down_gps(1);
             ubx_off(m_context.gps.ublox_config);
+        }
+        else {
+            next_screen = CUR_SCREEN_NONE;
         }
         if (loops++ > 100) {
 #ifdef DEBUG
@@ -979,6 +1004,8 @@ void app_mode_gps_handler(int verbose) {
         }
         m_context.wifi_ap_timeout = 0;
     }
+    if(!m_context.sdOK)
+        goto end;
     if (!m_context.gps.ublox_config->ready) {
         ubx_setup(m_context.gps.ublox_config);
     }
@@ -989,9 +1016,10 @@ void app_mode_gps_handler(int verbose) {
                 "gpsTask", /* String with name of task. */
                 CONFIG_GPS_LOG_STACK_SIZE,  /* Stack size in bytes. */
                 NULL,      /* Parameter passed as input of the task */
-                5,         /* Priority of the task. */
+                19,         /* Priority of the task. */
                 &t1, 1);      /* Task handle. */
     //ESP_LOGI(TAG, "Created GPS task");
+    end:
     TIMER_E
 }
 
@@ -1037,8 +1065,8 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
         switch(id) {
             case LOGGER_EVENT_SDCARD_MOUNTED:
                 ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
-                m_context.sdOK = true;
-                m_context.freeSpace = sdcard_space();
+                //m_context.sdOK = true;
+                //m_context.freeSpace = sdcard_space();
                 break;
             case LOGGER_EVENT_SDCARD_MOUNT_FAILED:
                 ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
@@ -1179,7 +1207,7 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
                 break;
             case UI_EVENT_FLUSH_DONE:
                 ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, ui_event_strings[id]);
-                screen_cb(&display);
+                // screen_cb(&display);
                 break;
             default:
                 break;
@@ -1220,6 +1248,46 @@ static esp_err_t events_uninit() {
     return ESP_OK;
 }
 
+void sd_mount_cb(void* arg) {
+    if(!sdcard_is_mounted()) {
+        if(sdcard_mount()==ESP_OK) {
+            m_context.sdOK = true;
+            m_context.freeSpace = sdcard_space();
+            ESP_LOGI(TAG, "[%s] sdcard mounted.", __FUNCTION__);
+
+            config_load_json(m_config, m_context.filename, m_context.filename_backup);
+
+            g_context_rtc_add_config(&m_context_rtc, m_config);
+            g_context_add_config(&m_context, m_config);
+            config_fix_values(m_config);
+            g_context_ubx_add_config(&m_context, 0);
+            log_config_add_config(m_context.gps.log_config, m_config);
+            /* strbf_t sbc;
+            strbf_init(&sbc);
+            config_encode_json(&sbc);
+            printf("conf:%s, size:%d", strbf_finish(&sbc), sbc.cur-sbc.start);
+            strbf_reset(&sbc);
+            config_get_json(&sbc, 0);
+            printf("conf:%s, size:%d", strbf_finish(&sbc), sbc.cur-sbc.start);
+            strbf_free(&sbc);
+            */
+        }
+        else if (!esp_timer_is_active(sd_timer)) {
+            const esp_timer_create_args_t sd_timer_args = {
+                .callback = &sd_mount_cb,
+                .name = "sd_mount",
+                .arg = 0
+            };
+            ESP_ERROR_CHECK(esp_timer_create(&sd_timer_args, &sd_timer));
+            ESP_ERROR_CHECK(esp_timer_start_periodic(sd_timer, 1000000)); // 500ms
+        }
+    }
+    else if (esp_timer_is_active(sd_timer)) {
+            esp_timer_stop(sd_timer);
+            esp_timer_delete(sd_timer);
+    }
+}
+
 static void setup(void) {
     TIMER_S
     app_mode = APP_MODE_BOOT;
@@ -1239,11 +1307,26 @@ static void setup(void) {
     lcd_refreshing_sem = xSemaphoreCreateBinary();
     xSemaphoreGive(lcd_refreshing_sem);
     display_init(&display);
-    //g_context_rtc_defaults(&m_context_rtc);  // init rtc battery state before wakeup
+
+    const esp_timer_create_args_t screen_periodic_timer_args = {
+        .callback = &screen_cb,
+        .name = "scr_tmr",
+        .arg = &display
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&screen_periodic_timer_args, &screen_periodic_timer));
+    ESP_LOGI(TAG, "[%s] start screen timer.", __FUNCTION__);
+    ESP_ERROR_CHECK(esp_timer_start_periodic(screen_periodic_timer, 1000000)); // 1000ms
 
     wakeup_init();  // Print the wakeup reason for ESP32, go back to sleep is timer is wake-up source !
 
     init_button();
+    const esp_timer_create_args_t button_timer_args = {
+        .callback = &button_timer_cb,
+        .name = "btn_tmr",
+        .arg = 0
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&button_timer_args, &button_timer));
+
 #ifdef CONFIG_USE_FATFS
     fatfs_init();
 #endif
@@ -1259,36 +1342,12 @@ static void setup(void) {
     if (!m_context.gps.Gps_fields_OK)
         init_gps_context_fields(&m_context.gps);
     ESP_LOGI(TAG, "[%s] init sdcard", __FUNCTION__);
-    if (!sdcard_init()) {
-        m_context.sdOK = true;
-        m_context.freeSpace = sdcard_space();
+    if(!sdcard_init())
+        sd_mount_cb(NULL);
 
-    config_load_json(m_config, m_context.filename, m_context.filename_backup);
-
-    g_context_rtc_add_config(&m_context_rtc, m_config);
-    g_context_add_config(&m_context, m_config);
-    config_fix_values(m_config);
-    g_context_ubx_add_config(&m_context, 0);
-    log_config_add_config(m_context.gps.log_config, m_config);
-    /* strbf_t sbc;
-    strbf_init(&sbc);
-    config_encode_json(&sbc);
-    printf("conf:%s, size:%d", strbf_finish(&sbc), sbc.cur-sbc.start);
-    strbf_reset(&sbc);
-    config_get_json(&sbc, 0);
-    printf("conf:%s, size:%d", strbf_finish(&sbc), sbc.cur-sbc.start);
-    strbf_free(&sbc);
-    */
-    }
     // appstage 1, structures initialized, start gps.
-    
     delay_ms(50);
     ret += 50;
-
-    /* #ifndef DEBUG
-    //esp_log_set_level_master(ESP_LOG_WARN);
-    esp_log_level_set("*", ESP_LOG_WARN);
-    #endif */
 
     http_rest_init(CONFIG_WEB_APP_PATH);
 
@@ -1304,21 +1363,6 @@ static void setup(void) {
     ESP_LOGW(TAG, "[%s] build debug mode not set.", __FUNCTION__);
 #endif
     task_memory_info("screenStarter-main");
-    // xTaskCreate(screenTask,   /* Task function. */
-    //             "screenTask", /* String with name of task. */
-    //             CONFIG_DISPLAY_TASK_STACK_SIZE,    /* Stack size in bytes was 10000, but stack overflow on task 2 ?????? now 20000. */
-    //             NULL,            /* Parameter passed as input of the task */
-    //             5,               /* Priority of the task. */
-    //             &t2);         /* Task handle. */
-
-    const esp_timer_create_args_t screen_periodic_timer_args = {
-        .callback = &screen_cb,
-        .name = "scr_tmr",
-        .arg = &display
-    };
-    ESP_ERROR_CHECK(esp_timer_create(&screen_periodic_timer_args, &screen_periodic_timer));
-    ESP_LOGI(TAG, "[%s] start screen timer.", __FUNCTION__);
-    ESP_ERROR_CHECK(esp_timer_start_periodic(screen_periodic_timer, 500000)); // 500ms
 
 #ifdef GPS_TIMER_STATS
     const esp_timer_create_args_t gps_periodic_timer_args = {
@@ -1329,12 +1373,6 @@ static void setup(void) {
     ESP_ERROR_CHECK(esp_timer_create(&gps_periodic_timer_args, &gps_periodic_timer));
 #endif
 
-    const esp_timer_create_args_t button_timer_args = {
-        .callback = &button_timer_cb,
-        .name = "btn_tmr",
-        .arg = 0
-    };
-    ESP_ERROR_CHECK(esp_timer_create(&button_timer_args, &button_timer));
     TIMER_E
 }
 
@@ -1381,6 +1419,7 @@ void app_main(void) {
 #if defined(CONFIG_BMX_ENABLE)
     deinit_bmx();
 #endif
+    sdcard_umount();
     sdcard_uninit();
 #ifdef CONFIG_USE_FATFS
     fatfs_uninit();
@@ -1395,12 +1434,10 @@ void app_main(void) {
     if(gps_periodic_timer)
         ESP_ERROR_CHECK(esp_timer_delete(gps_periodic_timer));
 #endif
-    if(screen_periodic_timer)
-        ESP_ERROR_CHECK(esp_timer_delete(screen_periodic_timer));
     vSemaphoreDelete(lcd_refreshing_sem);
     lcd_refreshing_sem = NULL;
-    if(button_timer)
-        ESP_ERROR_CHECK(esp_timer_delete(button_timer));
+    esp_timer_stop(screen_periodic_timer);
+    esp_timer_stop(button_timer);
     display_uninit(&display);
     config_delete(m_config);
     ubx_config_delete(m_context.gps.ublox_config);

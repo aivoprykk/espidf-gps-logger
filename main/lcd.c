@@ -80,7 +80,7 @@ static esp_err_t reset_display_state(struct display_state_s *display_state) {
 
 static uint32_t _boot_screen(const struct display_s *me) {
     TIMER_S
-    if (_lvgl_lock(0)) {
+    // if (_lvgl_lock(0)) {
         //driver_st7789_bl_set(75);
         // lv_scr_load(UI_INFO_SCREEN);
 
@@ -89,15 +89,15 @@ static uint32_t _boot_screen(const struct display_s *me) {
         } else {
             showBootScreen("Booting...");
         }
-        _lvgl_unlock();
-    }
+        // _lvgl_unlock();
+    // }
     TIMER_E
     return 1500;
 }
 static uint32_t _off_screen(const struct display_s *me, int choice) {
     TIMER_S
     int ret = 3000;
-    if (_lvgl_lock(0)) {
+    // if (_lvgl_lock(0)) {
         uint32_t milli = get_millis();
         float session_time = (milli - m_context.gps.start_logging_millis) / 1000;
         const char *title = m_context.request_restart ? "Reboot device" : m_context.Shut_down_Save_session ? 0 : "Going to sleep";
@@ -114,8 +114,8 @@ static uint32_t _off_screen(const struct display_s *me, int choice) {
             else
                 showBootScreen(title);
         }
-        _lvgl_unlock();
-    }
+        // _lvgl_unlock();
+    // }
     TIMER_E
     return ret;
 }
@@ -150,7 +150,7 @@ static uint32_t _sleep_screen(const struct display_s *me, int choice) {
     TIMER_S
     char tmp[24], *p = tmp;
     lv_label_t *panel;
-    if (_lvgl_lock(50)) {
+    // if (_lvgl_lock(50)) {
         showSleepScreen();
         statusbar_update();
         for(int i = 0; i < 6; i++) {
@@ -200,8 +200,8 @@ static uint32_t _sleep_screen(const struct display_s *me, int choice) {
         
         lv_label_set_text(ui_sleep_screen.myid, m_context_rtc.RTC_Sleep_txt);
 
-        _lvgl_unlock();
-    }
+    //     _lvgl_unlock();
+    // }
     TIMER_E
     return 100;
 }
@@ -735,7 +735,7 @@ static void statusbar_update() {
 static uint32_t _update_screen(const struct display_s *me, const screen_mode_t screen_mode, void *arg) {
     uint32_t ret = 50;
     UNUSED_PARAMETER(ret);
-    if (_lvgl_lock(0)) {
+    // if (_lvgl_lock(0)) {
         TIMER_S
         // char sz[64];
         logger_config_t *config = m_context.config;
@@ -1051,13 +1051,13 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
             statusbar_update();
         }
         ++screen_num;
-        _lvgl_unlock();
         // lv_timer_handler();
         ret += me->self->state.update_delay;
         old_screen = screen_mode;
         count++;
-        TIMER_E
-    }
+    //     _lvgl_unlock();
+    // }
+    TIMER_E
     return ret;
 }
 
@@ -1094,7 +1094,7 @@ struct display_s *display_init(struct display_s *me) {
 uint32_t lcd_lv_timer_handler() {
     uint32_t task_delay_ms = L_LVGL_TASK_MAX_DELAY_MS;
     if (_lvgl_lock(-1)) {
-        task_delay_ms = lv_timer_handler();
+        task_delay_ms = lv_timer_handler(); 
         _lvgl_unlock();
     }
     if (task_delay_ms > L_LVGL_TASK_MAX_DELAY_MS) {
@@ -1102,10 +1102,11 @@ uint32_t lcd_lv_timer_handler() {
     } else if (task_delay_ms < L_LVGL_TASK_MIN_DELAY_MS) {
         task_delay_ms = L_LVGL_TASK_MIN_DELAY_MS;
     }
+    ESP_LOGI(TAG, "[%s] task_delay_ms: %lu", __FUNCTION__, task_delay_ms);
     return task_delay_ms;
 }
 
-void lcd_timer_task(void *args) {
+static void lcd_ui_task(void *args) {
     uint32_t task_delay_ms = lcd_lv_timer_handler();
     while (1) {
         task_delay_ms = lcd_lv_timer_handler();
@@ -1113,12 +1114,14 @@ void lcd_timer_task(void *args) {
     }
 }
 
+#define LCD_UI_TASK_STACK_SIZE 3584
+
 static void lcd_ui_start() {
     ui_init();
-     xTaskCreatePinnedToCore(lcd_timer_task, "lcd_timer_task", 4096, NULL, 5, &display_task_handle, 1);
+     xTaskCreate(lcd_ui_task, "lcd_ui_task", LCD_UI_TASK_STACK_SIZE, NULL, 5, &display_task_handle);
 }
 
-void lcd_ui_stop() {
+static void lcd_ui_stop() {
     vTaskDelete(display_task_handle);
     ui_deinit();
 }
