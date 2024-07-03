@@ -50,7 +50,7 @@ typedef enum {
 //#define GPIO_NUM_xx CONFIG_BTN_GPIO_INPUT_0   //default GPIO_NUM_39 type is no int
 //#define BUTTON_PIN CONFIG_BTN_GPIO_INPUT_0
 #define EPOCH_2022 1640995200UL //start of the year 2022 1640995200
-
+void screen_cb(void* arg);
 #ifdef __cplusplus
 }
 #endif

@@ -250,6 +250,34 @@ static size_t temp_to_char(char *str) {
     return 0;
 }
 
+static const char *scr_fld[2][8][2] = {
+    {
+        {"Run", "Avg"},
+        {"Gate", "Ex"},
+        {"AlpR", "AlpM"},
+        {"NmR", "NmM"},
+        {"Dst", "500M"},
+        {"2sM", "10sM"},
+        {".5hR", ".5hM"},
+        {"1hR", "1hM"},
+    },
+    {
+        {"R", "A"},
+        {"G", "E"},
+        {"AlR", 0},
+        {"NmR", ""},
+        {0, 0},
+        {0, 0},
+        {0, 0},
+        {0, 0},
+    }
+};
+
+static const char * scr_fld_2[] = {
+    "-.--",
+    "0.00"
+};
+
 static int low_speed_seconds = 0;
 static esp_err_t speed_info_bar_update() {  // info bar when config->speed_large_font is 1 or 0
     const float calspd = m_context_rtc.RTC_calibration_speed;
@@ -294,13 +322,13 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->speed_large
     const char *var[] = {0, 0};
     char val[][24] = {{0}, {0}}, *p;
     if (!m_context.gps.ublox_config->ready || !m_context.gps.ublox_config->signal_ok) {
-        memcpy(val[0], "-.--", 4);
-        memcpy(val[1], "-.--", 4);
+        memcpy(val[0], scr_fld_2[0], 4);
+        memcpy(val[1], scr_fld_2[0], 4);
         goto topoint;
     }
     if(m_context.gps.S2.avg_s < 1000) { // 1ms = 3.6km/h
-        memcpy(val[0], "0.00", 4);
-        memcpy(val[1], "0.00", 4);
+        memcpy(val[0], scr_fld_2[1], 4);
+        memcpy(val[1], scr_fld_2[1], 4);
         goto topoint;
     }
     // double s1 = 0, s2 = 0;
@@ -317,11 +345,11 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->speed_large
         }
         topoint:
         if (font_size == 0) {
-            var[0] = "Run";
-            var[1] = "Avg";
+            var[0] = scr_fld[0][0][0];
+            var[1] = scr_fld[0][0][1];
         } else {
-            var[0] = "R";
-            var[1] = "A";
+            var[0] = scr_fld[1][0][0];
+            var[1] = scr_fld[1][0][1];
         }
     }
 
@@ -335,9 +363,9 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->speed_large
         if ((m_context.gps.alfa_window < 99) && (m_context.gps.Ublox.alfa_distance / 1000 < 255)) { // 250 meter na gijp
             if (m_context.gps.alfa_exit > 99)
                 m_context.gps.alfa_exit = 99;  // begrenzen alfa_exit...
-            var[0] = "Gate";
+            var[0] =  scr_fld[0][1][0];
             len = f_to_char(m_context.gps.alfa_window, val[0], 0);
-            var[1] = "Ex";
+            var[1] =  scr_fld[1][1][1];
             len = f_to_char(m_context.gps.alfa_exit, val[1], 0);
         } else { // alfa speed stats
             s[0] = m_context.gps.A500.display_max_speed * calspd;
@@ -346,7 +374,7 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->speed_large
                 if (font_size == 0)
                     f1_to_char(s[0], val[0]); // last alpha
                 else
-                    val[0][0] = 0;
+                    val[0][0] = 0; // var in 1. col, val in 2. col
                 if (s[1] > 1) {
                     f1_to_char(s[1], val[1]); // best alpha
                 } else {
@@ -356,22 +384,22 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->speed_large
                 if (font_size == 0)
                     f2_to_char(s[0], val[0]);
                 else
-                    *val[0] = 0;
+                    val[0][0] = 0;
                 if (s[1] > 1) {
                     f2_to_char(s[1], val[1]);
                 } else {
                 tonpoint:
-                    memcpy(val[1], "0.00", 4);
+                    memcpy(val[1], scr_fld_2[1], 4);
                     val[1][4]=0;
                 }
             }
             if (font_size == 0) {
-                var[0] = "Alfa";
-                var[1] = "Amax";  // nieuwe alfa laatste gijp or MISSED !!!!
+                var[0] = scr_fld[0][2][0];
+                var[1] = scr_fld[0][2][1];  // nieuwe alfa laatste gijp or MISSED !!!!
             } else {
                 // best Alfa from session on 500 m !!
-                var[0] = "Alfa=";
-                var[1] = "";
+                var[0] = scr_fld[1][2][0];
+                var[1] = scr_fld[1][2][1];
             }
         }
     } else if (field == 4 || display_priv.test_field == 4) { // nautical mile
@@ -391,21 +419,28 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->speed_large
                 *val[1] = 0;
         }
         if (font_size == 0) {
-            var[0] = "NMa";  // Actuele nautical mile
-            var[1] = "NM";
+            var[0] = scr_fld[0][3][0];  // Actuele nautical mile
+            var[1] = scr_fld[0][3][1];
         } else {
-            var[0] = "NM=";  // Actuele nautical mile
-            var[1] = "";
+            var[0] = scr_fld[1][3][0];  // Actuele nautical mile
+            var[1] = scr_fld[1][3][1];
         }
     } else if (field == 5 || display_priv.test_field == 5) { // total distance
         s[0] = m_context.gps.Ublox.total_distance / 1000000;
-        var[0] = "Dst";
+        s[1] = m_context.gps.M500.m_max_speed * calspd;
+        var[0] = scr_fld[0][4][0];
+        var[1] = scr_fld[0][4][1];
         len = f1_to_char(s[0], val[0]);
         if (s[0] >= 100){
             p=val[0]+len;
             memcpy(p, " km", 3);
             *(p+3)=0;
         }
+        if (s[1] > 100) {
+            f1_to_char(s[1], val[1]);
+        }
+        else
+            f2_to_char(s[1], val[1]);
     } else if (field == 6 || display_priv.test_field == 6) { // 2 and 10 seconds stats
         s[0] = m_context.gps.S2.display_max_speed * calspd;
         s[1] = m_context.gps.S10.display_max_speed * calspd;
@@ -416,8 +451,8 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->speed_large
             f2_to_char(s[0], val[0]);
             f2_to_char(s[1], val[1]);
         }
-        var[0] = "2S";
-        var[1] = "10S";
+        var[0] = scr_fld[0][5][0];
+        var[1] = scr_fld[0][5][1];
     } else if (field == 7 || display_priv.test_field == 7) { // 30 minutes stats
         s[0] = m_context.gps.S1800.avg_s * calspd;
         s[1] = m_context.gps.S1800.display_max_speed * calspd;
@@ -428,8 +463,8 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->speed_large
             f2_to_char(s[0], val[0]);
             f2_to_char(s[1], val[1]);
         }
-        var[0] = ".5hA";
-        var[1] = ".5hB";
+        var[0] = scr_fld[0][6][0];
+        var[1] = scr_fld[0][6][1];
     } else if (field == 8 || display_priv.test_field == 8) { // 60 minutes stats
         s[0] = m_context.gps.S3600.avg_s * calspd;
         s[1] = m_context.gps.S3600.display_max_speed * calspd;
@@ -440,28 +475,16 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->speed_large
             f2_to_char(s[0], val[0]);
             f2_to_char(s[1], val[1]);
         }
-        var[0] = "1hA";
-        var[1] = "1hB";
+        var[0] = scr_fld[0][7][0];
+        var[1] = scr_fld[0][7][1];
     }
 
     // col 1
-    if (var[0]) {
-        // DISPLAY_PRINT(var[0]);
         lv_label_set_text(ui_speed_screen.cells[0][0].info, var[0]);
-    }
-    if (*val[0]) {
-        // DISPLAY_PRINT(val[0]);  // 1 // last 10s max from run
         lv_label_set_text(ui_speed_screen.cells[0][0].title, val[0]);
-    }
     // col 2
-    if (var[1]) {
-        // DISPLAY_PRINT(var[1]);
         lv_label_set_text(ui_speed_screen.cells[0][1].info, var[1]);
-    }
-    if (*val[1]) {
-        // DISPLAY_PRINT(val[1]);  // 1
         lv_label_set_text(ui_speed_screen.cells[0][1].title, val[1]);
-    }
 
     int run_rectangle_length;
     int32_t millis = get_millis();
@@ -604,46 +627,46 @@ static void statusbar_bat_cb(lv_timer_t *timer) {
     }
 }
 
-static bool sdblink = false;
-static void statusbar_sdcard_cb(lv_timer_t *timer) {
-    #if defined(STATUS_PANEL_V1)
-    ui_status_panel_t * statusbar = &ui_status_panel;
-    if(!statusbar->parent) {
-        return;
-    }
-#else
-    lv_statusbar_t * statusbar = (lv_statusbar_t *)ui_StatusPanel;
-#endif
-    char tmp[24], *p = tmp;
-    lv_obj_t *panel;
-    if ((panel = statusbar->sdcard_image)) {
-        if (m_context.sdOK) {
-#if defined(CONFIG_DISPLAY_DRIVER_ST7789)
-            lv_obj_set_style_img_recolor(panel, lv_color_hex(0xA9B7B9), LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_obj_set_style_img_recolor_opa(panel, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-#endif
-            if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
-                lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
-            }
-        } else {
-            if (sdblink == 0) {
-                if (!lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
-                    lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
-                }
-                sdblink = 1;
-            } else {
-                if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
-                    lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
-                }
-#if defined(CONFIG_DISPLAY_DRIVER_ST7789)
-                lv_obj_set_style_img_recolor(panel, lv_color_hex(0xE32424), LV_PART_MAIN | LV_STATE_DEFAULT);
-                lv_obj_set_style_img_recolor_opa(panel, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-#endif
-                sdblink = 0;
-            }
-        }
-    }
-}
+// static bool sdblink = false;
+// static void statusbar_sdcard_cb(lv_timer_t *timer) {
+//     #if defined(STATUS_PANEL_V1)
+//     ui_status_panel_t * statusbar = &ui_status_panel;
+//     if(!statusbar->parent) {
+//         return;
+//     }
+// #else
+//     lv_statusbar_t * statusbar = (lv_statusbar_t *)ui_StatusPanel;
+// #endif
+//     char tmp[24], *p = tmp;
+//     lv_obj_t *panel;
+//     if ((panel = statusbar->sdcard_image)) {
+//         if (m_context.sdOK) {
+// #if defined(CONFIG_DISPLAY_DRIVER_ST7789)
+//             lv_obj_set_style_img_recolor(panel, lv_color_hex(0xA9B7B9), LV_PART_MAIN | LV_STATE_DEFAULT);
+//             lv_obj_set_style_img_recolor_opa(panel, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+// #endif
+//             if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
+//                 lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
+//             }
+//         } else {
+//             if (sdblink == 0) {
+//                 if (!lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
+//                     lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
+//                 }
+//                 sdblink = 1;
+//             } else {
+//                 if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
+//                     lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
+//                 }
+// #if defined(CONFIG_DISPLAY_DRIVER_ST7789)
+//                 lv_obj_set_style_img_recolor(panel, lv_color_hex(0xE32424), LV_PART_MAIN | LV_STATE_DEFAULT);
+//                 lv_obj_set_style_img_recolor_opa(panel, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+// #endif
+//                 sdblink = 0;
+//             }
+//         }
+//     }
+// }
 
 static uint8_t gblink = 0;
 static void statusbar_gps_cb(lv_timer_t *timer) {
@@ -658,17 +681,17 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
     lv_obj_t *panel;
     if ((panel = statusbar->gps_image)) {
         char tmp[24]={0}, *p = tmp;
-        if ((m_context.gps.ublox_config->ready && m_context.gps.ublox_config->signal_ok) || statusbar->viewmode == 2 ) {
-            if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
-                lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
-            }
-        } else {
-            if (!lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
-                lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
-            }
-            return;
-        }
-        if(statusbar->viewmode==2) { 
+        // if ((m_context.gps.ublox_config->ready && m_context.gps.ublox_config->signal_ok) || statusbar->viewmode == 2 ) {
+        //     if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
+        //         lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
+        //     }
+        // } else {
+        //     if (!lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
+        //         lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
+        //     }
+        //     return;
+        // }
+        //if(statusbar->viewmode==2) { 
             if (!m_context.gps.ublox_config->ready){
                 memcpy(p, "gps fail", 8);
             }
@@ -690,12 +713,12 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
             if(!p || strcmp(p, &(tmp[0]))) {
                 lv_label_set_text(panel, &(tmp[0]));
             }
-       }
-        else {
-            p = lv_label_get_text(panel);
-            if(!p || memcmp(p, LV_SYMBOL_GPS, 3)) {
-                lv_label_set_text(panel, LV_SYMBOL_GPS);
-            }
+    //   }
+    //     else {
+    //         p = lv_label_get_text(panel);
+    //         if(!p || memcmp(p, LV_SYMBOL_GPS, 3)) {
+    //             lv_label_set_text(panel, LV_SYMBOL_GPS);
+    //         }
         }
         // if (gps->ublox_config->ubx_msg.navPvt.numSV >= 4) {
         //     lv_obj_set_style_img_recolor(panel, lv_color_hex(0xA9B7B9), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -716,7 +739,7 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
         //         }
         //     }
         // }
-    }
+    // }
 }
 
 static void statusbar_update() {
@@ -727,7 +750,7 @@ static void statusbar_update() {
     // // temp //
     statusbar_temp_cb(0);
     // // sdcard image //
-    statusbar_sdcard_cb(0);
+    // statusbar_sdcard_cb(0);
     // // gps/wifi image //
     statusbar_gps_cb(0);
 }
@@ -1102,15 +1125,18 @@ uint32_t lcd_lv_timer_handler() {
     } else if (task_delay_ms < L_LVGL_TASK_MIN_DELAY_MS) {
         task_delay_ms = L_LVGL_TASK_MIN_DELAY_MS;
     }
-    ESP_LOGI(TAG, "[%s] task_delay_ms: %lu", __FUNCTION__, task_delay_ms);
     return task_delay_ms;
 }
 
 static void lcd_ui_task(void *args) {
     uint32_t task_delay_ms = lcd_lv_timer_handler();
     while (1) {
+        TIMER_S
+        screen_cb(0);
         task_delay_ms = lcd_lv_timer_handler();
+        ESP_LOGI(TAG, "[%s] task_delay: %lums, took:%lums", __FUNCTION__, task_delay_ms, get_millis()-millis);
         delay_ms(task_delay_ms); /*Sleep for 5 millisecond*/
+        TIMER_E
     }
 }
 

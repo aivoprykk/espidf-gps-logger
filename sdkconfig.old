@@ -1825,9 +1825,7 @@ CONFIG_SD_PIN_CS=13
 #
 # Spiffs Configuration
 #
-CONFIG_USE_SPIFFS=y
-CONFIG_SPIFFS_MOUNT_POINT="/spiffs"
-CONFIG_SPIFFS_PARTITION_LABEL="spifstore"
+# CONFIG_USE_SPIFFS is not set
 # end of Spiffs Configuration
 
 #
