@@ -79,7 +79,8 @@ static esp_err_t reset_display_state(struct display_state_s *display_state) {
 }
 
 static uint32_t _boot_screen(const struct display_s *me) {
-    TIMER_S
+    LOGR
+    // TIMER_S
     // if (_lvgl_lock(0)) {
         //driver_st7789_bl_set(75);
         // lv_scr_load(UI_INFO_SCREEN);
@@ -91,11 +92,12 @@ static uint32_t _boot_screen(const struct display_s *me) {
         }
         // _lvgl_unlock();
     // }
-    TIMER_E
+    // TIMER_E
     return 1500;
 }
 static uint32_t _off_screen(const struct display_s *me, int choice) {
-    TIMER_S
+    LOGR
+    // TIMER_S
     int ret = 3000;
     // if (_lvgl_lock(0)) {
         uint32_t milli = get_millis();
@@ -116,7 +118,7 @@ static uint32_t _off_screen(const struct display_s *me, int choice) {
         }
         // _lvgl_unlock();
     // }
-    TIMER_E
+    // TIMER_E
     return ret;
 }
 
@@ -147,7 +149,8 @@ static struct sleep_scr_s sleep_scr_info_fields[2][6] = {
 static void statusbar_update();
 
 static uint32_t _sleep_screen(const struct display_s *me, int choice) {
-    TIMER_S
+    LOGR
+    // TIMER_S
     char tmp[24], *p = tmp;
     lv_label_t *panel;
     // if (_lvgl_lock(50)) {
@@ -202,7 +205,7 @@ static uint32_t _sleep_screen(const struct display_s *me, int choice) {
 
     //     _lvgl_unlock();
     // }
-    TIMER_E
+    // TIMER_E
     return 100;
 }
 
@@ -223,7 +226,8 @@ static float last_temp=0;
 
 static size_t temp_to_char(char *str) {
 #if defined(CONFIG_BMX_ENABLE)
-    TIMER_S
+    LOGR
+    // TIMER_S
     float t=0;
     float p=0, h=0;
     bmx_readings_f(&t, &p, &h);
@@ -242,7 +246,7 @@ static size_t temp_to_char(char *str) {
     ++len;
     *pt = 'C';
     *(++pt) = 0;
-    TIMER_E
+    // TIMER_E
     return ++len;
     end:
 #endif
@@ -316,8 +320,6 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->speed_large
             field = 3;  // first 350 m after gibe  alfa screen !!
     }
 
-    size_t len;
-
     double s[] = {0, 0};
     const char *var[] = {0, 0};
     char val[][24] = {{0}, {0}}, *p;
@@ -364,9 +366,9 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->speed_large
             if (m_context.gps.alfa_exit > 99)
                 m_context.gps.alfa_exit = 99;  // begrenzen alfa_exit...
             var[0] =  scr_fld[0][1][0];
-            len = f_to_char(m_context.gps.alfa_window, val[0], 0);
+            f_to_char(m_context.gps.alfa_window, val[0], 0);
             var[1] =  scr_fld[1][1][1];
-            len = f_to_char(m_context.gps.alfa_exit, val[1], 0);
+            f_to_char(m_context.gps.alfa_exit, val[1], 0);
         } else { // alfa speed stats
             s[0] = m_context.gps.A500.display_max_speed * calspd;
             s[1] = m_context.gps.A500.alfa_speed_max * calspd;
@@ -430,12 +432,7 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->speed_large
         s[1] = m_context.gps.M500.m_max_speed * calspd;
         var[0] = scr_fld[0][4][0];
         var[1] = scr_fld[0][4][1];
-        len = f1_to_char(s[0], val[0]);
-        if (s[0] >= 100){
-            p=val[0]+len;
-            memcpy(p, " km", 3);
-            *(p+3)=0;
-        }
+        f1_to_char(s[0], val[0]);
         if (s[1] > 100) {
             f1_to_char(s[1], val[1]);
         }
@@ -531,7 +528,7 @@ void statusbar_time_cb(lv_timer_t *timer) {
 #else
     lv_statusbar_t * statusbar = (lv_statusbar_t *)ui_StatusPanel;
 #endif
-    char tmp[24], *p = tmp;
+    char tmp[24]={0}, *p = tmp;
     lv_obj_t *panel;
     if ((panel = statusbar->time_label)) {
         if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN))
@@ -540,23 +537,14 @@ void statusbar_time_cb(lv_timer_t *timer) {
             struct tm tms;
             memset(&tms, 0, sizeof(struct tm));
             getLocalTime(&tms, 0);
-            if (tms.tm_year != 0 && tms.tm_mday != 0) {
-                if (tms.tm_hour != last_hr || tms.tm_min != last_min) {
-                    last_hr = tms.tm_hour;
-                    last_min = tms.tm_min;
-                    time_to_char_hm(last_hr, last_min, p);
-                    lv_label_set_text(panel, p);
-                }
-            }
+            time_to_char_hm(tms.tm_hour, tms.tm_min, p);
         } else {
-            p = tmp;
-            p += time_to_char_hm(m_context_rtc.RTC_hour, m_context_rtc.RTC_min, p);
-            *p = ' ';
-            ++p;
-            p += date_to_char(m_context_rtc.RTC_day, m_context_rtc.RTC_month, m_context_rtc.RTC_year, 0, p);
-            *p = 0;
-            p = tmp;
-            lv_label_set_text(panel, p);
+            p += time_to_char_hm(m_context_rtc.RTC_hour, m_context_rtc.RTC_min, p), *p++ = ' ';
+            p += date_to_char(m_context_rtc.RTC_day, m_context_rtc.RTC_month, m_context_rtc.RTC_year, 0, p), *p = 0;
+        }
+        if(strcmp(lv_label_get_text(panel), &(tmp[0]))) {
+            printf("** (date)time: %s ** \n", tmp);
+            lv_label_set_text(panel, &(tmp[0]));
         }
     }
 }
@@ -681,16 +669,16 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
     lv_obj_t *panel;
     if ((panel = statusbar->gps_image)) {
         char tmp[24]={0}, *p = tmp;
-        // if ((m_context.gps.ublox_config->ready && m_context.gps.ublox_config->signal_ok) || statusbar->viewmode == 2 ) {
-        //     if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
-        //         lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
-        //     }
-        // } else {
-        //     if (!lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
-        //         lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
-        //     }
-        //     return;
-        // }
+        if ((m_context.gps.ublox_config->ready && m_context.gps.ublox_config->signal_ok)) {
+            if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
+                lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
+            }
+        } else {
+            if (!lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
+                lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
+            }
+            return;
+        }
         //if(statusbar->viewmode==2) { 
             if (!m_context.gps.ublox_config->ready){
                 memcpy(p, "gps fail", 8);
@@ -756,10 +744,11 @@ static void statusbar_update() {
 }
 
 static uint32_t _update_screen(const struct display_s *me, const screen_mode_t screen_mode, void *arg) {
+    LOGR
     uint32_t ret = 50;
     UNUSED_PARAMETER(ret);
     // if (_lvgl_lock(0)) {
-        TIMER_S
+        // TIMER_S
         // char sz[64];
         logger_config_t *config = m_context.config;
         char tmp[24] = {0}, *p = tmp, tmpb[24]={0}, *pb = tmpb;
@@ -1080,7 +1069,7 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
         count++;
     //     _lvgl_unlock();
     // }
-    TIMER_E
+    // TIMER_E
     return ret;
 }
 
@@ -1129,12 +1118,13 @@ uint32_t lcd_lv_timer_handler() {
 }
 
 static void lcd_ui_task(void *args) {
-    uint32_t task_delay_ms = lcd_lv_timer_handler();
+    uint32_t task_delay_ms = lcd_lv_timer_handler(0);
     while (1) {
         TIMER_S
-        screen_cb(0);
-        task_delay_ms = lcd_lv_timer_handler();
-        ESP_LOGI(TAG, "[%s] task_delay: %lums, took:%lums", __FUNCTION__, task_delay_ms, get_millis()-millis);
+        task_delay_ms = screen_cb(0);
+        TIMER_M(TAG,"[%s] screen_cb took:%lums", __FUNCTION__);
+        task_delay_ms += lcd_lv_timer_handler();
+        TIMER_M(TAG,"[%s] next delay:%lums, lcd_lv_timer_handler took:%lums", __FUNCTION__, task_delay_ms);
         delay_ms(task_delay_ms); /*Sleep for 5 millisecond*/
         TIMER_E
     }

@@ -118,22 +118,25 @@ static void low_to_sleep(uint64_t sleep_time) {
     esp_sleep_enable_timer_wakeup(uS_TO_S_FACTOR * sleep_time);
     events_uninit();
     delay_ms(1500);
-    bool shutdown_progress = 1;
+    volatile uint16_t shutdown_progress = 1;
     while(shutdown_progress){
-        if(_lvgl_lock(-1)){
-            deinit_adc();
-            // esp_timer_stop(screen_periodic_timer);
-            esp_timer_stop(button_timer);
-            button_deinit();
+        printf("shutdown_progress %d\n", shutdown_progress);
+        if(_lvgl_lock(1000)){
             _lvgl_unlock();
-            display_uninit(&display);
-            ESP_LOGI(TAG, "Setup ESP32 to sleep for every %d Seconds", (int)sleep_time);
-            //delay_ms(250);
-            ESP_LOGI(TAG, "Going to sleep now");
-            esp_deep_sleep(uS_TO_S_FACTOR * sleep_time);
-            shutdown_progress = 0;
+            break;
         }
+        if(shutdown_progress++>3)
+            break; 
+        delay_ms(100);
     }
+    deinit_adc();
+    esp_timer_stop(button_timer);
+    button_deinit();
+    // display_uninit(&display);
+    ESP_LOGI(TAG, "Setup ESP32 to sleep for every %d Seconds", (int)sleep_time);
+    //delay_ms(250);
+    ESP_LOGI(TAG, "Going to sleep now");
+    esp_deep_sleep(uS_TO_S_FACTOR * sleep_time);
 }
 
 static void update_bat(uint8_t verbose) {
@@ -651,14 +654,14 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
     }
 }
 
-void screen_cb(void* arg) {
+uint32_t screen_cb(void* arg) {
     LOGR
     if(xSemaphoreTake(lcd_refreshing_sem, 0) != pdTRUE)
-        return;
+        return 0;
     struct display_s *dspl = &display;
     uint32_t delay=0;
     if(!dspl || !dspl->op) {
-        return;
+        goto end;
     }
     cur_screen = CUR_SCREEN_NONE;
     stat_screen_count = m_context.stat_screen_count;
@@ -691,33 +694,34 @@ void screen_cb(void* arg) {
             }
 #endif  
     if(app_mode == APP_MODE_SLEEP){
-        delay = op->sleep_screen(dspl, 0);
+        op->sleep_screen(dspl, 0);
     }
     if (app_mode == APP_MODE_SHUT_DOWN || app_mode == APP_MODE_RESTART) {
-            delay = op->off_screen(dspl, m_context_rtc.RTC_OFF_screen);
-        // delay = Shut_down();
+            op->off_screen(dspl, m_context_rtc.RTC_OFF_screen);
+        // Shut_down();
         // screen_active = false;
     } else if (m_context.boot_screen_stage || app_mode <= APP_MODE_BOOT) {
-            delay = op->boot_screen(dspl);
+            op->boot_screen(dspl);
         m_context.boot_screen_stage = m_context.boot_screen_stage > 4 ? 0 : m_context.boot_screen_stage + 1;
     } else if (m_context.low_bat_count > 6) { // 6 * 10sec = 1 min
         m_context_rtc.RTC_OFF_screen = 1;  // Simon screen with info text !!!
-        delay = op->off_screen(dspl, m_context_rtc.RTC_OFF_screen);
+        op->off_screen(dspl, m_context_rtc.RTC_OFF_screen);
         app_mode = APP_MODE_SHUT_DOWN;
         // screen_active = false;
     } else if (app_mode == APP_MODE_WIFI) {
+        delay=1000;
         int wifistatus = wifi_status();
         if(!m_context.sdOK) {
-            delay = op->update_screen(dspl, SCREEN_MODE_SD_TROUBLE, 0);
+            op->update_screen(dspl, SCREEN_MODE_SD_TROUBLE, 0);
         }
         else if(next_screen==CUR_SCREEN_SAVE_SESSION)
-            delay = op->off_screen(dspl, m_context_rtc.RTC_OFF_screen);
+            op->off_screen(dspl, m_context_rtc.RTC_OFF_screen);
         else if (wifistatus < 1) {
-            delay = op->update_screen(dspl, SCREEN_MODE_WIFI_START, 0);
+            op->update_screen(dspl, SCREEN_MODE_WIFI_START, 0);
         } else if (wifistatus == 1) {
-            delay = op->update_screen(dspl, SCREEN_MODE_WIFI_STATION, 0);
+            op->update_screen(dspl, SCREEN_MODE_WIFI_STATION, 0);
         } else {
-            delay = op->update_screen(dspl, SCREEN_MODE_WIFI_AP, 0);
+            op->update_screen(dspl, SCREEN_MODE_WIFI_AP, 0);
         }
     } else if (app_mode == APP_MODE_GPS) {
         bool run_is_active = (m_context.gps.gps_speed / 1000.0f >= m_context.config->stat_speed);
@@ -726,21 +730,22 @@ void screen_cb(void* arg) {
 
         if(!m_context.sdOK && next_screen == CUR_SCREEN_NONE) {
             // sd card trouble!!!
-            delay = op->update_screen(dspl, SCREEN_MODE_SD_TROUBLE, 0);
+            op->update_screen(dspl, SCREEN_MODE_SD_TROUBLE, 0);
         }
         else if (m_context.gps.ublox_config->signal_ok && (m_context.gps.ublox_config->ubx_msg.navPvt.iTOW - m_context.gps.old_nav_pvt_itow) > (m_context.gps.time_out_gps_msg * 5) && next_screen == CUR_SCREEN_NONE) {
             // gps signal lost!!!
-            delay = op->update_screen(dspl, SCREEN_MODE_GPS_TROUBLE, 0);  // gps signal lost !!!
+            op->update_screen(dspl, SCREEN_MODE_GPS_TROUBLE, 0);  // gps signal lost !!!
             cur_screen = CUR_SCREEN_GPS_TROUBLE;
         } else if (!m_context.gps.ublox_config->ready || (!run_is_active  && next_screen == CUR_SCREEN_GPS_INFO)) {
             // gps not ready jet!!!
-            delay = op->update_screen(dspl, SCREEN_MODE_GPS_INIT, 0);
+            op->update_screen(dspl, SCREEN_MODE_GPS_INIT, 0);
             cur_screen = CUR_SCREEN_GPS_INFO;
+            delay=1000;
         }
 /* #if defined(GPIO12_ACTIF)
         // else if(Short_push12.long_pulse)
         else if (m_context.Field_choice2) {  //! io12_short_pulse
-            delay = op->update_screen(dspl, m_context.gpio12_screen[m_context.gpio12_screen_cur], 0);
+            op->update_screen(dspl, m_context.gpio12_screen[m_context.gpio12_screen_cur], 0);
         }  // heeft voorrang, na drukken GPIO_pin 12, 10 STAT4 scherm !!!
 #endif */       
         else if (!run_is_active && (m_context.gps.S2.display_max_speed  > 1000 || next_screen == CUR_SCREEN_GPS_STATS)) { 
@@ -749,14 +754,15 @@ void screen_cb(void* arg) {
                 m_context.stat_screen_cur = 0;  // screen_count = 2
             }
             const uint8_t sc = (m_context.stat_screen_cur >= m_context.stat_screen_count) ? m_context.stat_screen_cur+1 : m_context.stat_screen[m_context.stat_screen_cur];
-            delay = op->update_screen(dspl, sc, 0);
+            op->update_screen(dspl, sc, 0);
             cur_screen = CUR_SCREEN_GPS_STATS;
+            delay=500;
         } else {
             if (m_context.config->speed_large_font == 2) {
-                    delay = op->update_screen(dspl, SCREEN_MODE_SPEED_2, 0);
+                    op->update_screen(dspl, SCREEN_MODE_SPEED_2, 0);
             } else {
                 if(op)
-                    delay = op->update_screen(dspl, SCREEN_MODE_SPEED_1, 0);
+                    op->update_screen(dspl, SCREEN_MODE_SPEED_1, 0);
             }
             m_context.stat_screen_cur = 0;
             stat_screen_count = m_context.stat_screen_count;
@@ -764,10 +770,11 @@ void screen_cb(void* arg) {
         }
     }
     end:
+#if defined(DEBUG)
     task_memory_info("screencb_task");
-    UNUSED_PARAMETER(delay);
+#endif
     xSemaphoreGive(lcd_refreshing_sem);
-    //delay_ms(delay >= 50 ? 0 : 50-delay);
+    return delay;
 }
 
 // uint32_t time_to_next_sec = 0;
@@ -1064,25 +1071,25 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
     if(base == LOGGER_EVENT) {
         switch(id) {
             case LOGGER_EVENT_SDCARD_MOUNTED:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
                 //m_context.sdOK = true;
                 //m_context.freeSpace = sdcard_space();
                 break;
             case LOGGER_EVENT_SDCARD_MOUNT_FAILED:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
                 m_context.sdOK = false;
                 m_context.freeSpace = 0;
                 break;
             case LOGGER_EVENT_SDCARD_UNMOUNTED:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
                 m_context.sdOK = false;
                 m_context.freeSpace = 0;
                 break;
             case LOGGER_EVENT_FAT_PARTITION_MOUNTED:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
                 break;
             case LOGGER_EVENT_FAT_PARTITION_MOUNT_FAILED:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
                 break;
             case LOGGER_EVENT_FAT_PARTITION_UNMOUNTED:
                 break;
@@ -1093,32 +1100,32 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
             //     ESP_LOGW(TAG, "--- LOGGER_EVENT_SCREEN_UPDATE task elapsed:%" PRId32 " ---", *(int32_t *)event_data);
             //     break;
             default:
-                // ESP_LOGI(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+                // DLOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
                 break;
         }
     }
     else if(base == UBX_EVENT) {
         switch(id) {
             case UBX_EVENT_DATETIME_SET:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
                 break;
             case UBX_EVENT_UART_INIT_DONE:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
                 break;
             case UBX_EVENT_UART_INIT_FAIL:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
                 break;
             case UBX_EVENT_UART_DEINIT_DONE:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
                 break;
             case UBX_EVENT_SETUP_DONE:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
                 break;
             case UBX_EVENT_SETUP_FAIL:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
                 break;
             default:
-                // ESP_LOGI(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+                // DLOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
                 break;
         }
     }
@@ -1126,11 +1133,11 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
         const char * c = 0;
         switch(id) {
             case GPS_LOG_EVENT_LOG_FILES_OPENED:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, gps_log_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, gps_log_event_strings[id]);
                 goto printfiles;
                 break;
             case GPS_LOG_EVENT_LOG_FILES_OPEN_FAILED:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, gps_log_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, gps_log_event_strings[id]);
                 printfiles:
                 for(uint8_t i=0; i<SD_FD_END; i++) {
                     printf("** [%s] ", i==SD_GPX ? "GPX" : i==SD_GPY ? "GPY" : i==SD_SBP ? "SBP" : i==SD_UBX ? "UBX" : i==SD_TXT ? "TXT" : "-");
@@ -1145,55 +1152,55 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
                 }
                 break;
             case GPS_LOG_EVENT_LOG_FILES_SAVED:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, gps_log_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, gps_log_event_strings[id]);
                 break;
             case GPS_LOG_EVENT_LOG_FILES_CLOSED:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, gps_log_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, gps_log_event_strings[id]);
                 break;
             default:
-                // ESP_LOGI(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+                // DLOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
                 break;
         }
     }
     else if(base == ADC_EVENT) {
         switch(id) {
             case ADC_EVENT_VOLTAGE_UPDATE:
-                //ESP_LOGI(TAG, "[%s] ADC_EVENT_VOLTAGE_UPDATE", __FUNCTION__);
+                //DLOG(TAG, "[%s] ADC_EVENT_VOLTAGE_UPDATE", __FUNCTION__);
                 break;
             case ADC_EVENT_BATTERY_LOW:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, adc_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, adc_event_strings[id]);
                 break;
             case ADC_EVENT_BATTERY_OK:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, adc_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, adc_event_strings[id]);
                 break;
             default:
-                // ESP_LOGI(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+                // DLOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
                 break;
         }
     }
     else if(base == WIFI_EVENT) {
         switch(id) {
             case WIFI_EVENT_AP_START:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
                 http_start_webserver();
                 break;
             case WIFI_EVENT_AP_STOP:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
                 http_stop_webserver();
                 break;
             default:
-                // ESP_LOGI(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+                // DLOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
                 break;
         }
     }
     else if(base == IP_EVENT) {
         switch(id) {
             case IP_EVENT_STA_GOT_IP:
-                ESP_LOGI(TAG, "[%s] IP_EVENT_STA_GOT_IP", __FUNCTION__);
+                DLOG(TAG, "[%s] IP_EVENT_STA_GOT_IP", __FUNCTION__);
                 http_start_webserver();
                 break;
             case IP_EVENT_STA_LOST_IP:
-                ESP_LOGI(TAG, "[%s] IP_EVENT_STA_LOST_IP", __FUNCTION__);
+                DLOG(TAG, "[%s] IP_EVENT_STA_LOST_IP", __FUNCTION__);
                 http_stop_webserver();
                 break;
             default:
@@ -1203,10 +1210,10 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
     else if(base == UI_EVENT) {
         switch(id) {
             case UI_EVENT_FLUSH_START:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, ui_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, ui_event_strings[id]);
                 break;
             case UI_EVENT_FLUSH_DONE:
-                ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, ui_event_strings[id]);
+                DLOG(TAG, "[%s] %s", __FUNCTION__, ui_event_strings[id]);
                 // screen_cb(&display);
                 break;
             default:
@@ -1214,7 +1221,7 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
         }
     }
     else {
-        // ESP_LOGI(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+        // DLOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
     }
 }
 
