@@ -1,6 +1,6 @@
 {
 "cal_bat":1.0020,
-"cal_speed":3.600,
+"speed_unit": 1,
 "sample_rate":10,
 "gnss":3,
 "speed_field":1,

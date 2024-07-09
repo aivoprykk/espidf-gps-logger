@@ -80,46 +80,30 @@ static esp_err_t reset_display_state(struct display_state_s *display_state) {
 
 static uint32_t _boot_screen(const struct display_s *me) {
     LOGR
-    // TIMER_S
-    // if (_lvgl_lock(0)) {
-        //driver_st7789_bl_set(75);
-        // lv_scr_load(UI_INFO_SCREEN);
-
         if(m_context.low_bat_count > 10) {
             showLowBatScreen();
         } else {
             showBootScreen("Booting...");
         }
-        // _lvgl_unlock();
-    // }
-    // TIMER_E
     return 1500;
 }
 static uint32_t _off_screen(const struct display_s *me, int choice) {
     LOGR
-    // TIMER_S
-    int ret = 3000;
-    // if (_lvgl_lock(0)) {
         uint32_t milli = get_millis();
         float session_time = (milli - m_context.gps.start_logging_millis) / 1000;
         const char *title = m_context.request_restart ? "Reboot device" : m_context.Shut_down_Save_session ? 0 : "Going to sleep";
         if (session_time > 0) {
             ESP_LOGD(TAG, "session time: %.2f s", session_time);
         }
-        // lv_scr_load(UI_INFO_SCREEN);
-
         if(m_context.low_bat_count > 5) {
             showLowBatScreen();
         } else {
             if(!title)
-                showSaveSessionScreen(title);
+                showSaveSessionScreen();
             else
                 showBootScreen(title);
         }
-        // _lvgl_unlock();
-    // }
-    // TIMER_E
-    return ret;
+    return 1000;
 }
 
 typedef struct sleep_scr_s {
@@ -150,7 +134,7 @@ static void statusbar_update();
 
 static uint32_t _sleep_screen(const struct display_s *me, int choice) {
     LOGR
-    // TIMER_S
+
     char tmp[24], *p = tmp;
     lv_label_t *panel;
     // if (_lvgl_lock(50)) {
@@ -163,49 +147,8 @@ static uint32_t _sleep_screen(const struct display_s *me, int choice) {
                 lv_label_set_text(ui_sleep_screen.cells[i][j].info, sleep_scr_info_fields[j][i].info);
             }
         }
-        // f2_to_char(m_context_rtc.RTC_avg_10s, p);
-        // lv_label_set_text(ui_sleep_screen.cells[0][0].title,p);
-        // lv_label_set_text(ui_sleep_screen.cells[0][0].info, "AV:");
-        // f2_to_char(m_context_rtc.RTC_R1_10s, p);
-        // lv_label_set_text(ui_sleep_screen.cells[1][0].title,p);
-        // lv_label_set_text(ui_sleep_screen.cells[1][0].info, "R1:");
-        // f2_to_char(m_context_rtc.RTC_R2_10s, p);
-        // lv_label_set_text(ui_sleep_screen.cells[2][0].title,p);
-        // lv_label_set_text(ui_sleep_screen.cells[2][0].info, "R2:");
-        // f2_to_char(m_context_rtc.RTC_R3_10s, p);
-        // lv_label_set_text(ui_sleep_screen.cells[3][0].title,p);
-        // lv_label_set_text(ui_sleep_screen.cells[3][0].info, "R3:");
-        // f2_to_char(m_context_rtc.RTC_R4_10s, p);
-        // lv_label_set_text(ui_sleep_screen.cells[4][0].title,p);
-        // lv_label_set_text(ui_sleep_screen.cells[4][0].info, "R4:");
-        // f2_to_char(m_context_rtc.RTC_R5_10s, p);
-        // lv_label_set_text(ui_sleep_screen.cells[5][0].title,p);
-        // lv_label_set_text(ui_sleep_screen.cells[5][0].info, "R5:");
-        
-        // f2_to_char(m_context_rtc.RTC_max_2s, p);
-        // lv_label_set_text(ui_sleep_screen.cells[0][1].title,p);
-        // lv_label_set_text(ui_sleep_screen.cells[0][1].info, "2sec:");
-        // f2_to_char(m_context_rtc.RTC_1h, p);
-        // lv_label_set_text(ui_sleep_screen.cells[1][1].title,p);
-        // lv_label_set_text(ui_sleep_screen.cells[1][1].info, "1h:");
-        // f2_to_char(m_context_rtc.RTC_500m, p);
-        // lv_label_set_text(ui_sleep_screen.cells[2][1].title,p);
-        // lv_label_set_text(ui_sleep_screen.cells[2][1].info, "500m:");
-        // f2_to_char(m_context_rtc.RTC_mile, p);
-        // lv_label_set_text(ui_sleep_screen.cells[3][1].title,p);
-        // lv_label_set_text(ui_sleep_screen.cells[3][1].info, "NM:");
-        // f2_to_char(m_context_rtc.RTC_distance, p);
-        // lv_label_set_text(ui_sleep_screen.cells[4][1].title,p);
-        // lv_label_set_text(ui_sleep_screen.cells[4][1].info, "Dist:");
-        // f2_to_char(m_context_rtc.RTC_alp, p);
-        // lv_label_set_text(ui_sleep_screen.cells[5][1].title,p);
-        // lv_label_set_text(ui_sleep_screen.cells[5][1].info, "ALFA:");
-        
         lv_label_set_text(ui_sleep_screen.myid, m_context_rtc.RTC_Sleep_txt);
 
-    //     _lvgl_unlock();
-    // }
-    // TIMER_E
     return 100;
 }
 
@@ -759,17 +702,17 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
         int state = (int)arg;
         lv_obj_t *panel, *parent;
         stat_screen_t *sc_data = 0;
-        //const char *title;
+        const char *gps = 0;
+        size_t gpslen=0;
+        const lv_img_dsc_t *img_src = 0;
         switch (screen_mode) {
             case SCREEN_MODE_GPS_TROUBLE:
                 showGpsTroubleScreen();
                 break;
             case SCREEN_MODE_GPS_INIT:
             case SCREEN_MODE_GPS_READY:
-                const char *gps = ubx_chip_str(m_context.gps.ublox_config);
-                size_t gpslen = strlen(gps);
-                const lv_img_dsc_t *img_src = 0;
-                
+                gps = ubx_chip_str(m_context.gps.ublox_config);
+                gpslen = strlen(gps);
                 memcpy(p, gps, gpslen);
                 p += gpslen;
                 if(gpslen==7 && !strcmp(gps, "UNKNOWN")) {
@@ -821,7 +764,7 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 showPushScreen(state);
                 break;
             case SCREEN_MODE_SD_TROUBLE:
-                showSdTroubleScreen(state);
+                showSdTroubleScreen();
                 break;
             case SCREEN_MODE_SHUT_DOWN:
                 ui_flush_screens(&ui_init_screen.screen);
@@ -1117,29 +1060,45 @@ uint32_t lcd_lv_timer_handler() {
     return task_delay_ms;
 }
 
+static bool lcd_ui_task_running = true;
+static bool lcd_ui_task_finished = 0;
 static void lcd_ui_task(void *args) {
-    uint32_t task_delay_ms = lcd_lv_timer_handler(0);
-    while (1) {
+    uint32_t task_delay_ms = lcd_lv_timer_handler();
+    while (lcd_ui_task_running) {
         TIMER_S
         task_delay_ms = screen_cb(0);
         TIMER_M(TAG,"[%s] screen_cb took:%lums", __FUNCTION__);
         task_delay_ms += lcd_lv_timer_handler();
         TIMER_M(TAG,"[%s] next delay:%lums, lcd_lv_timer_handler took:%lums", __FUNCTION__, task_delay_ms);
-        delay_ms(task_delay_ms); /*Sleep for 5 millisecond*/
+        if(lcd_ui_task_running)
+            delay_ms(task_delay_ms); /*Sleep for 5 millisecond*/
         TIMER_E
     }
+    ILOG(TAG, "[%s] task finishing", __FUNCTION__);
+    lcd_ui_task_finished = 1;
+    vTaskDelete(NULL);
+    display_task_handle = NULL;
 }
 
 #define LCD_UI_TASK_STACK_SIZE 3584
 
 static void lcd_ui_start() {
     ui_init();
-     xTaskCreate(lcd_ui_task, "lcd_ui_task", LCD_UI_TASK_STACK_SIZE, NULL, 5, &display_task_handle);
+    xTaskCreate(lcd_ui_task, "lcd_ui_task", LCD_UI_TASK_STACK_SIZE, NULL, 5, &display_task_handle);
 }
 
 static void lcd_ui_stop() {
-    vTaskDelete(display_task_handle);
+    TIMER_S
+    uint32_t wait = get_millis() + 3000;
+    lcd_ui_task_running = false;
+    while (!lcd_ui_task_finished) {
+        delay_ms(10);
+        if (get_millis() > wait) {
+            break;
+        }
+    }
     ui_deinit();
+    TIMER_E
 }
 
 void display_uninit(struct display_s *me) {

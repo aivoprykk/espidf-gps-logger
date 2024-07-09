@@ -39,6 +39,19 @@ typedef enum {
     APP_MODE_RESTART
 } app_mode_t;
 
+typedef enum {
+    CUR_SCREEN_NONE,
+    CUR_SCREEN_GPS_STATS,
+    CUR_SCREEN_GPS_SPEED,
+    CUR_SCREEN_GPS_INFO,
+    CUR_SCREEN_GPS_TROUBLE,
+    CUR_SCREEN_SAVE_SESSION,
+    CUR_SCREEN_WIFI_INFO,
+    CUR_SCREEN_OFF_SCREEN,
+    CUR_SCREEN_SLEEP_SCREEN,
+    CUR_SCREEN_LOW_BAT,
+} cur_screens_t;
+
 #define INCLUDE_pcTaskGetTaskName 1
 
 //#define STATIC_DEBUG        //indien gps test zonder snelheid en met wifi actief

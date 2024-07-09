@@ -1,13 +1,13 @@
 
 
 #include <driver/gpio.h>
-#include <bmx280.h>
 #include <esp_log.h>
 
 #include "private.h"
-#include "bmx.h"
 #include "logger_common.h"
 #if defined(CONFIG_BMX_ENABLE)
+#include "bmx.h"
+#include <bmx280.h>
 
 static const char *TAG = "bmx";
 static bmx280_t *bmx280 = 0;

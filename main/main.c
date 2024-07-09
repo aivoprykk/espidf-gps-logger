@@ -103,10 +103,17 @@ bool g_master_log_level = ESP_LOG_INFO;
 
 struct display_s display;
 static esp_err_t events_uninit();
-// esp_timer_handle_t screen_periodic_timer = 0;
 esp_timer_handle_t button_timer = 0;
 esp_timer_handle_t sd_timer = 0;
 static int screen_cb_loop = 0;
+static uint8_t displ_trigger_done = 0;
+static cur_screens_t cur_screen = CUR_SCREEN_NONE;
+static cur_screens_t next_screen = CUR_SCREEN_NONE;
+uint8_t app_mode_wifi_on = 0;
+uint8_t app_mode_gps_on = 0;
+static bool button_down = false;
+static int button_time = -1;
+static uint8_t stat_screen_count = 0;
 
 static SemaphoreHandle_t lcd_refreshing_sem = NULL;
 
@@ -117,22 +124,26 @@ static void low_to_sleep(uint64_t sleep_time) {
     gpio_deep_sleep_hold_en();
     esp_sleep_enable_timer_wakeup(uS_TO_S_FACTOR * sleep_time);
     events_uninit();
-    delay_ms(1500);
-    volatile uint16_t shutdown_progress = 1;
-    while(shutdown_progress){
-        printf("shutdown_progress %d\n", shutdown_progress);
+    delay_ms(2000);
+    volatile uint8_t shutdown_progress = 1;
+    if(cur_screen != CUR_SCREEN_OFF_SCREEN && cur_screen != CUR_SCREEN_SLEEP_SCREEN)
+        displ_trigger_done = 1;
+    while(1){
+        printf("** shutdown_progress %hhu, displ_trigger_done: %hhu\n", shutdown_progress, displ_trigger_done);
         if(_lvgl_lock(1000)){
             _lvgl_unlock();
+        }
+        if(!displ_trigger_done){
             break;
         }
-        if(shutdown_progress++>3)
+        if(shutdown_progress++>2)
             break; 
-        delay_ms(100);
+        delay_ms(500);
     }
     deinit_adc();
     esp_timer_stop(button_timer);
     button_deinit();
-    // display_uninit(&display);
+    display_uninit(&display);
     ESP_LOGI(TAG, "Setup ESP32 to sleep for every %d Seconds", (int)sleep_time);
     //delay_ms(250);
     ESP_LOGI(TAG, "Going to sleep now");
@@ -233,7 +244,6 @@ static void go_to_sleep(uint64_t sleep_time) {
         // esp_wifi_disconnect();
         // esp_wifi_stop();
     }
-    ubx_off(m_context.gps.ublox_config);
     write_rtc(&m_context_rtc);
     sdcard_umount();
     sdcard_uninit();
@@ -250,19 +260,20 @@ static void go_to_sleep(uint64_t sleep_time) {
 }
 
 static int shut_down_gps(int no_sleep) {
+    if (!m_context.gps.ublox_config->ready && no_sleep) 
+        return 0;
     LOGR 
     int ret = 0;
+    if(m_context.gps.ublox_config->time_set)
+            next_screen = CUR_SCREEN_SAVE_SESSION;
     if (m_context.gps.ublox_config->ready) {
         m_context.gps.ublox_config->signal_ok = false;
         m_context.gps.GPS_delay = 0;
         //vTaskDelete(t1);
-        uint32_t timeout = get_millis()+3000; // wait for 3 seconds
+        uint32_t timeout = get_millis() + 3000; // wait for 3 seconds
         while(t1!=0 && timeout > get_millis()){
             delay_ms(100);
         }
-    }
-    if (!no_sleep) {
-        m_context.long_push = true;
     }
     if (m_context.gps.ublox_config->time_set) {  // Only safe to RTC memory if new GPS data is available !!
         m_context_rtc.RTC_distance = m_context.gps.Ublox.total_distance / 1000000;
@@ -290,21 +301,20 @@ static int shut_down_gps(int no_sleep) {
                 session_results_alfa(&m_context.gps, &m_context.gps.A250, &m_context.gps.M250, m_context_rtc.RTC_calibration_speed);
                 session_results_alfa(&m_context.gps, &m_context.gps.A500, &m_context.gps.M500, m_context_rtc.RTC_calibration_speed);
             }
-            // vTaskDelay(100 / portTICK_PERIOD_MS);
             ret += 100;
             // flush_files(&m_context);
             close_files(&m_context.gps);
         }
         struct tm tms;
         getLocalTime(&tms, 0);
-        m_context_rtc.RTC_year = ((tms.tm_year) + 1900);  // local time is corrected with timezone
-                                                          // in close_files() !!
+        m_context_rtc.RTC_year = ((tms.tm_year) + 1900);  // local time is corrected with timezone in close_files() !!
         m_context_rtc.RTC_month = ((tms.tm_mon) + 1);
         m_context_rtc.RTC_day = (tms.tm_mday);
         m_context_rtc.RTC_hour = (tms.tm_hour);
         m_context_rtc.RTC_min = (tms.tm_min);
         m_context.gps.ublox_config->time_set = 0;
     }
+    ubx_off(m_context.gps.ublox_config);
     task_memory_info("before_sleep");
     if (!no_sleep) {
         go_to_sleep(5);  // got to sleep after 5 s, this to prevent booting when
@@ -497,15 +507,17 @@ static void gpsTask(void *parameter) {
 #endif
         now = get_millis();
         if (!m_context.gps.ublox_config->ready || !ubxMessage->mon_ver.hwVersion[0]) {
-            mt = now - ubx->ready_time;
-            // ESP_LOGW(TAG, "[%s] Gps not ready ... %" PRIu32 " ", __FUNCTION__, mt);
+            mt = now - (ubx->ready ? ubx->ready_time : 5000);
+            // ILOG(TAG, "[%s] Gps init ... (%lums)", __FUNCTION__, mt);
             if (mt > 10000) { // 5 seconds
-                ubx_off(ubx);
-                delay_ms(100);
+                if(ubx->ready){
+                    ubx_off(ubx);
+                    delay_ms(100);
+                    ubx_fail_count++;
+                }
                 ubx_setup(m_context.gps.ublox_config);
-                ubx_fail_count++;
             }
-            if(ubx_fail_count>5) {
+            if(ubx_fail_count>50) {
                 if(!ubxMessage->mon_ver.hwVersion[0]) // only when no hwVersion is received
                     app_mode = APP_MODE_WIFI;
                 else
@@ -529,24 +541,6 @@ static void gpsTask(void *parameter) {
     //ESP_LOGI(TAG, "[%s] ended", __FUNCTION__);
 }
 
-typedef enum {
-    CUR_SCREEN_NONE,
-    CUR_SCREEN_GPS_STATS,
-    CUR_SCREEN_GPS_SPEED,
-    CUR_SCREEN_GPS_INFO,
-    CUR_SCREEN_GPS_TROUBLE,
-    CUR_SCREEN_SAVE_SESSION,
-    CUR_SCREEN_WIFI_INFO,
-} cur_screens_t;
-
-uint8_t app_mode_wifi_on = 0;
-uint8_t app_mode_gps_on = 0;
-
-static cur_screens_t cur_screen = CUR_SCREEN_NONE;
-static cur_screens_t next_screen = CUR_SCREEN_NONE;
-static bool button_down = false;
-static int button_time = -1;
-static uint8_t stat_screen_count = 0;
  // 200ms before exec cb
 #define BUTTON_CB_WAIT_BEFORE 210000
 
@@ -586,7 +580,6 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
             }
             else if (tm >= CONFIG_BTN_GPIO_INPUT_LONG_PRESS_TIME_MS) {
                 app_mode = APP_MODE_SHUT_DOWN;
-                m_context.long_push = 1;
             }
             else {
                 esp_timer_start_once(button_timer, BUTTON_CB_WAIT_BEFORE);
@@ -695,27 +688,30 @@ uint32_t screen_cb(void* arg) {
 #endif  
     if(app_mode == APP_MODE_SLEEP){
         op->sleep_screen(dspl, 0);
+        cur_screen = CUR_SCREEN_SLEEP_SCREEN;
     }
     if (app_mode == APP_MODE_SHUT_DOWN || app_mode == APP_MODE_RESTART) {
-            op->off_screen(dspl, m_context_rtc.RTC_OFF_screen);
-        // Shut_down();
-        // screen_active = false;
+        op->off_screen(dspl, m_context_rtc.RTC_OFF_screen);
+        cur_screen = CUR_SCREEN_OFF_SCREEN;
+        delay=1000;
     } else if (m_context.boot_screen_stage || app_mode <= APP_MODE_BOOT) {
-            op->boot_screen(dspl);
+        op->boot_screen(dspl);
         m_context.boot_screen_stage = m_context.boot_screen_stage > 4 ? 0 : m_context.boot_screen_stage + 1;
     } else if (m_context.low_bat_count > 6) { // 6 * 10sec = 1 min
-        m_context_rtc.RTC_OFF_screen = 1;  // Simon screen with info text !!!
         op->off_screen(dspl, m_context_rtc.RTC_OFF_screen);
+        cur_screen = CUR_SCREEN_OFF_SCREEN;
+        delay=1000;
         app_mode = APP_MODE_SHUT_DOWN;
-        // screen_active = false;
     } else if (app_mode == APP_MODE_WIFI) {
         delay=1000;
         int wifistatus = wifi_status();
         if(!m_context.sdOK) {
             op->update_screen(dspl, SCREEN_MODE_SD_TROUBLE, 0);
         }
-        else if(next_screen==CUR_SCREEN_SAVE_SESSION)
+        else if(next_screen==CUR_SCREEN_SAVE_SESSION){
             op->off_screen(dspl, m_context_rtc.RTC_OFF_screen);
+            cur_screen = CUR_SCREEN_SAVE_SESSION;
+        }
         else if (wifistatus < 1) {
             op->update_screen(dspl, SCREEN_MODE_WIFI_START, 0);
         } else if (wifistatus == 1) {
@@ -931,15 +927,7 @@ void wifiTask() {
     uint32_t loops = 0;
     task_memory_info("wifiTask");
     while (app_mode == APP_MODE_WIFI) {
-        if (m_context.gps.ublox_config->ready) {
-            if(m_context.gps.ublox_config->time_set)
-                next_screen = CUR_SCREEN_SAVE_SESSION;
-            shut_down_gps(1);
-            ubx_off(m_context.gps.ublox_config);
-        }
-        else {
-            next_screen = CUR_SCREEN_NONE;
-        }
+        
         if (loops++ > 100) {
 #ifdef DEBUG
                task_memory_info("wifiTask");
@@ -973,7 +961,6 @@ void app_mode_wifi_handler(int verbose) {
         return;
     app_mode = APP_MODE_WIFI;
     app_mode_wifi_on = 1;
-    // m_context.NTP_time_set = 0;
     if (!wifi_context.Wifi_on) {
         ESP_LOGI(TAG, "[%s] first turn wifi on", __FUNCTION__);
         wifi_init();
@@ -1013,11 +1000,7 @@ void app_mode_gps_handler(int verbose) {
     }
     if(!m_context.sdOK)
         goto end;
-    if (!m_context.gps.ublox_config->ready) {
-        ubx_setup(m_context.gps.ublox_config);
-    }
-    // Create RTOS task, so logging and e-paper update are separated (update
-    // e-paper is blocking, 800 ms !!)
+    
     task_memory_info("gpsStarter-main");
     xTaskCreatePinnedToCore(gpsTask,   /* Task function. */
                 "gpsTask", /* String with name of task. */
@@ -1025,7 +1008,6 @@ void app_mode_gps_handler(int verbose) {
                 NULL,      /* Parameter passed as input of the task */
                 19,         /* Priority of the task. */
                 &t1, 1);      /* Task handle. */
-    //ESP_LOGI(TAG, "Created GPS task");
     end:
     TIMER_E
 }
@@ -1036,8 +1018,8 @@ void task_app_mode_handler(int verbose) {
         case APP_MODE_SHUT_DOWN:
             app_mode_wifi_on = 0;
             app_mode_gps_on = 0;
+            shut_down_gps(0);  // save gps, go to sleep (==0)
             if (app_mode != APP_MODE_RESTART) {
-                shut_down_gps(0);  // save gps, go to sleep (==0)
                 app_mode = APP_MODE_UNKNOWN;
             } else {
                 go_to_restart();
@@ -1045,6 +1027,8 @@ void task_app_mode_handler(int verbose) {
             break;
         case APP_MODE_WIFI:
             app_mode_gps_on = 0;
+                next_screen = CUR_SCREEN_NONE;
+            shut_down_gps(1);
             app_mode_wifi_handler(verbose);
             break;
         case APP_MODE_GPS:
@@ -1071,25 +1055,25 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
     if(base == LOGGER_EVENT) {
         switch(id) {
             case LOGGER_EVENT_SDCARD_MOUNTED:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
                 //m_context.sdOK = true;
                 //m_context.freeSpace = sdcard_space();
                 break;
             case LOGGER_EVENT_SDCARD_MOUNT_FAILED:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
                 m_context.sdOK = false;
                 m_context.freeSpace = 0;
                 break;
             case LOGGER_EVENT_SDCARD_UNMOUNTED:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
                 m_context.sdOK = false;
                 m_context.freeSpace = 0;
                 break;
             case LOGGER_EVENT_FAT_PARTITION_MOUNTED:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
                 break;
             case LOGGER_EVENT_FAT_PARTITION_MOUNT_FAILED:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
                 break;
             case LOGGER_EVENT_FAT_PARTITION_UNMOUNTED:
                 break;
@@ -1100,32 +1084,32 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
             //     ESP_LOGW(TAG, "--- LOGGER_EVENT_SCREEN_UPDATE task elapsed:%" PRId32 " ---", *(int32_t *)event_data);
             //     break;
             default:
-                // DLOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+                // ILOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
                 break;
         }
     }
     else if(base == UBX_EVENT) {
         switch(id) {
             case UBX_EVENT_DATETIME_SET:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
                 break;
             case UBX_EVENT_UART_INIT_DONE:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
                 break;
             case UBX_EVENT_UART_INIT_FAIL:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
                 break;
             case UBX_EVENT_UART_DEINIT_DONE:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
                 break;
             case UBX_EVENT_SETUP_DONE:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
                 break;
             case UBX_EVENT_SETUP_FAIL:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
                 break;
             default:
-                // DLOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+                // ILOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
                 break;
         }
     }
@@ -1133,11 +1117,11 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
         const char * c = 0;
         switch(id) {
             case GPS_LOG_EVENT_LOG_FILES_OPENED:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, gps_log_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, gps_log_event_strings[id]);
                 goto printfiles;
                 break;
             case GPS_LOG_EVENT_LOG_FILES_OPEN_FAILED:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, gps_log_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, gps_log_event_strings[id]);
                 printfiles:
                 for(uint8_t i=0; i<SD_FD_END; i++) {
                     printf("** [%s] ", i==SD_GPX ? "GPX" : i==SD_GPY ? "GPY" : i==SD_SBP ? "SBP" : i==SD_UBX ? "UBX" : i==SD_TXT ? "TXT" : "-");
@@ -1152,55 +1136,55 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
                 }
                 break;
             case GPS_LOG_EVENT_LOG_FILES_SAVED:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, gps_log_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, gps_log_event_strings[id]);
                 break;
             case GPS_LOG_EVENT_LOG_FILES_CLOSED:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, gps_log_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, gps_log_event_strings[id]);
                 break;
             default:
-                // DLOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+                // ILOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
                 break;
         }
     }
     else if(base == ADC_EVENT) {
         switch(id) {
             case ADC_EVENT_VOLTAGE_UPDATE:
-                //DLOG(TAG, "[%s] ADC_EVENT_VOLTAGE_UPDATE", __FUNCTION__);
+                //ILOG(TAG, "[%s] ADC_EVENT_VOLTAGE_UPDATE", __FUNCTION__);
                 break;
             case ADC_EVENT_BATTERY_LOW:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, adc_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, adc_event_strings[id]);
                 break;
             case ADC_EVENT_BATTERY_OK:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, adc_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, adc_event_strings[id]);
                 break;
             default:
-                // DLOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+                // ILOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
                 break;
         }
     }
     else if(base == WIFI_EVENT) {
         switch(id) {
             case WIFI_EVENT_AP_START:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
                 http_start_webserver();
                 break;
             case WIFI_EVENT_AP_STOP:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
                 http_stop_webserver();
                 break;
             default:
-                // DLOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+                // ILOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
                 break;
         }
     }
     else if(base == IP_EVENT) {
         switch(id) {
             case IP_EVENT_STA_GOT_IP:
-                DLOG(TAG, "[%s] IP_EVENT_STA_GOT_IP", __FUNCTION__);
+                ILOG(TAG, "[%s] IP_EVENT_STA_GOT_IP", __FUNCTION__);
                 http_start_webserver();
                 break;
             case IP_EVENT_STA_LOST_IP:
-                DLOG(TAG, "[%s] IP_EVENT_STA_LOST_IP", __FUNCTION__);
+                ILOG(TAG, "[%s] IP_EVENT_STA_LOST_IP", __FUNCTION__);
                 http_stop_webserver();
                 break;
             default:
@@ -1210,18 +1194,20 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
     else if(base == UI_EVENT) {
         switch(id) {
             case UI_EVENT_FLUSH_START:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, ui_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, ui_event_strings[id]);
                 break;
             case UI_EVENT_FLUSH_DONE:
-                DLOG(TAG, "[%s] %s", __FUNCTION__, ui_event_strings[id]);
+                ILOG(TAG, "[%s] %s", __FUNCTION__, ui_event_strings[id]);
                 // screen_cb(&display);
+                if(displ_trigger_done)
+                    displ_trigger_done = 0;
                 break;
             default:
                 break;
         }
     }
     else {
-        // DLOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+        // ILOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
     }
 }
 

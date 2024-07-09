@@ -16,8 +16,6 @@ set(PRIVREQ driver esp_wifi
 
 if(CONFIG_DISPLAY_USE_LVGL)
 set(srcs ${srcs} lcd.c)
-else()
-set(srcs ${srcs} epaper.c)
 endif()
 
 if(CONFIG_BMX_ENABLE)
