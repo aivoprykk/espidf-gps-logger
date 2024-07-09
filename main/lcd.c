@@ -65,21 +65,15 @@ struct display_priv_s {
 struct display_priv_s display_priv = {{false}, 0, 0, 0, 0, false};
 
 static const char *TAG = "display";
-//static lcd_g_t screen;
-TIMER_INIT
-
-//lv_obj_t *lv_statusbar=0;
 
 static esp_err_t reset_display_state(struct display_state_s *display_state) {
-    LOGR;
+    ILOG(TAG, "[%s]", __func__);
     display_state->initialized = 0;
-    // memset(&display_state->speed_1_fonts, 0, sizeof(speed_num_font_t));
-    // memset(&display_state->speed_2_fonts, 0, sizeof(speed_num_font_t));
     return ESP_OK;
 }
 
 static uint32_t _boot_screen(const struct display_s *me) {
-    LOGR
+    ILOG(TAG, "[%s]", __func__);
         if(m_context.low_bat_count > 10) {
             showLowBatScreen();
         } else {
@@ -88,7 +82,7 @@ static uint32_t _boot_screen(const struct display_s *me) {
     return 1500;
 }
 static uint32_t _off_screen(const struct display_s *me, int choice) {
-    LOGR
+    ILOG(TAG, "[%s]", __func__);
         uint32_t milli = get_millis();
         float session_time = (milli - m_context.gps.start_logging_millis) / 1000;
         const char *title = m_context.request_restart ? "Reboot device" : m_context.Shut_down_Save_session ? 0 : "Going to sleep";
@@ -133,7 +127,7 @@ static struct sleep_scr_s sleep_scr_info_fields[2][6] = {
 static void statusbar_update();
 
 static uint32_t _sleep_screen(const struct display_s *me, int choice) {
-    LOGR
+    ILOG(TAG, "[%s]", __func__);
 
     char tmp[24], *p = tmp;
     lv_label_t *panel;
@@ -169,7 +163,7 @@ static float last_temp=0;
 
 static size_t temp_to_char(char *str) {
 #if defined(CONFIG_BMX_ENABLE)
-    LOGR
+    ILOG(TAG, "[%s]", __func__);
     // TIMER_S
     float t=0;
     float p=0, h=0;
@@ -687,7 +681,7 @@ static void statusbar_update() {
 }
 
 static uint32_t _update_screen(const struct display_s *me, const screen_mode_t screen_mode, void *arg) {
-    LOGR
+    ILOG(TAG, "[%s]", __func__);
     uint32_t ret = 50;
     UNUSED_PARAMETER(ret);
     // if (_lvgl_lock(0)) {
@@ -1024,7 +1018,7 @@ display_op_t screen_ops = {
     .uninit = display_uninit};
 
 struct display_s *display_init(struct display_s *me) {
-    TIMER_S
+    ILOG(TAG, "[%s]", __func__);
     me->op = &screen_ops;
     me->self = &display_priv;
     reset_display_state(&display_priv.state);
@@ -1042,7 +1036,6 @@ struct display_s *display_init(struct display_s *me) {
     
     lcd_ui_start();
 
-    // TIMER_E
     return me;
 }
 
@@ -1064,15 +1057,26 @@ static bool lcd_ui_task_running = true;
 static bool lcd_ui_task_finished = 0;
 static void lcd_ui_task(void *args) {
     uint32_t task_delay_ms = lcd_lv_timer_handler();
+    bool last = false;
     while (lcd_ui_task_running) {
-        TIMER_S
+        last:
+        DMEAS_START();
         task_delay_ms = screen_cb(0);
-        TIMER_M(TAG,"[%s] screen_cb took:%lums", __FUNCTION__);
+        DMEAS_END(TAG, "[%s] screen_cb took: %llu us",  __FUNCTION__);
         task_delay_ms += lcd_lv_timer_handler();
-        TIMER_M(TAG,"[%s] next delay:%lums, lcd_lv_timer_handler took:%lums", __FUNCTION__, task_delay_ms);
-        if(lcd_ui_task_running)
-            delay_ms(task_delay_ms); /*Sleep for 5 millisecond*/
-        TIMER_E
+        DMEAS_END(TAG, "[%s] next delay %lu ms, lcd_lv_timer_handler took: %llu us", __FUNCTION__, task_delay_ms);
+        if(lcd_ui_task_running) {
+            uint32_t ms = get_millis() + task_delay_ms;
+            while (lcd_ui_task_running && get_millis() < ms) {
+                delay_ms(20);
+            }
+        } else {
+            if(!last){
+                last = true;
+                goto last; // system going to shut down, do the last screen update
+            }
+        }
+        DMEAS_END(TAG, "[%s] loop took:%llu us",  __FUNCTION__);
     }
     ILOG(TAG, "[%s] task finishing", __FUNCTION__);
     lcd_ui_task_finished = 1;
@@ -1088,21 +1092,24 @@ static void lcd_ui_start() {
 }
 
 static void lcd_ui_stop() {
-    TIMER_S
+    ILOG(TAG, "[%s]", __func__);
+    DMEAS_START();
     uint32_t wait = get_millis() + 3000;
     lcd_ui_task_running = false;
+    uint16_t i = 0;
     while (!lcd_ui_task_finished) {
-        delay_ms(10);
+        delay_ms(20);
         if (get_millis() > wait) {
             break;
         }
+        ++i;
     }
     ui_deinit();
-    TIMER_E
+    DMEAS_END(TAG, "[%s] %hu 20 ms loops, total %llu us ",  __FUNCTION__, i);
 }
 
 void display_uninit(struct display_s *me) {
-    LOGR
+    ILOG(TAG, "[%s]", __func__);
     if (me && me->self && me->self->displayOK) {
         lcd_ui_stop();
         display_del();

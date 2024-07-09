@@ -232,7 +232,7 @@ static int wakeup_init() {
 static void go_to_restart() {
     LOGR
         // m_context.request_restart = 0;
-        delay_ms(500);
+    delay_ms(2000);
     esp_restart();
 }
 
@@ -1018,10 +1018,11 @@ void task_app_mode_handler(int verbose) {
         case APP_MODE_SHUT_DOWN:
             app_mode_wifi_on = 0;
             app_mode_gps_on = 0;
-            shut_down_gps(0);  // save gps, go to sleep (==0)
-            if (app_mode != APP_MODE_RESTART) {
-                app_mode = APP_MODE_UNKNOWN;
+            
+            if (app_mode == APP_MODE_SHUT_DOWN) {
+                shut_down_gps(0);  // save gps
             } else {
+                shut_down_gps(1);  // save gps
                 go_to_restart();
             }
             break;
