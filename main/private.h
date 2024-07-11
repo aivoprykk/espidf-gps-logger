@@ -60,42 +60,51 @@ typedef enum {
 #define GPIO12_ACTIF        //if GPIO12 is used as wake up, standard GPIO12 function is not activated !!
 #endif
 #define WAKE_UP_GPIO CONFIG_BTN_GPIO_INPUT_0   //default 39
-//#define GPIO_NUM_xx CONFIG_BTN_GPIO_INPUT_0   //default GPIO_NUM_39 type is no int
-//#define BUTTON_PIN CONFIG_BTN_GPIO_INPUT_0
 #define EPOCH_2022 1640995200UL //start of the year 2022 1640995200
+
 uint32_t screen_cb(void* arg);
 
-#if (DEBUG == 1) // "A lot of logs to give detailed information"
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL <= 2)
 
-#ifndef DLOG
-#define DLOG(a, b, ...) ESP_LOGI(a, b, __VA_ARGS__)
+#include "esp_timer.h"
+#include "esp_log.h"
+
 #endif
-#ifndef DMEAS_START
-#define DMEAS_START() uint64_t _start = (esp_timer_get_time()), _end = 0
-#endif
-#ifndef DMEAS_END
-#define DMEAS_END(a, b, ...) \
-    _end = (esp_timer_get_time());  \
-    ESP_LOGI(a, b, __VA_ARGS__, _end - _start)
-#endif
-#ifndef ILOG
-#define ILOG DLOG
-#endif
-#ifndef IMEAS_START
-#define IMEAS_START DMEAS_START
-#endif
-#ifndef IMEAS_END
-#define IMEAS_END DMEAS_END
-#endif
-#ifndef WLOG
-#define WLOG DLOG
-#endif
-#ifndef WMEAS_START
-#define WMEAS_START DMEAS_START
-#endif
-#ifndef WMEAS_END
-#define WMEAS_END DMEAS_END
-#endif
+
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL == CONFIG_LOGGER_COMMON_LOG_LEVEL_TRACE) // "A lot of logs to give detailed information"
+
+#define DLOG LOG_INFO
+#define DMEAS_START MEAS_START
+#define DMEAS_END MEAS_END
+#define ILOG LOG_INFO
+#define IMEAS_START MEAS_START
+#define IMEAS_END MEAS_END
+#define WLOG LOG_INFO
+#define WMEAS_START MEAS_START
+#define WMEAS_END MEAS_END
+
+#elif (CONFIG_LOGGER_COMMON_LOG_LEVEL == CONFIG_LOGGER_COMMON_LOG_LEVEL_INFO) // "Log important events"
+
+#define DLOG(a, b, ...) ((void)0)
+#define DMEAS_START() ((void)0)
+#define DMEAS_END(a, b, ...) ((void)0)
+#define ILOG LOG_INFO
+#define IMEAS_START MEAS_START
+#define WLOG LOG_INFO
+#define WMEAS_START MEAS_START
+#define WMEAS_END MEAS_END
+
+#elif (CONFIG_LOGGER_COMMON_LOG_LEVEL == CONFIG_LOGGER_COMMON_LOG_LEVEL_WARN) // "Log if something unwanted happened but didn't cause a problem"
+
+#define DLOG(a, b, ...) ((void)0)
+#define DMEAS_START() ((void)0)
+#define DMEAS_END(a, b, ...) ((void)0)
+#define ILOG(a, b, ...) ((void)0)
+#define IMEAS_START() ((void)0)
+#define IMEAS_END(a, b, ...) ((void)0)
+#define WLOG LOG_INFO
+#define WMEAS_START MEAS_START
+#define WMEAS_END MEAS_END
 
 #else // "Do not log anything"
 
@@ -108,7 +117,6 @@ uint32_t screen_cb(void* arg);
 #define WLOG(a, b, ...) ((void)0)
 #define WMEAS_START() ((void)0)
 #define WMEAS_END(a, b, ...) ((void)0)
-
 #endif
 
 #ifdef __cplusplus

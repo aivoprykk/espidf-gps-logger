@@ -59,7 +59,6 @@
 #include "ui_events.h"
 
 ESP_EVENT_DEFINE_BASE(LOGGER_EVENT);
-TIMER_INIT
 
 #if defined(CONFIG_IDF_TARGET_ESP32S3)
 #define PIN_POWER_ON 15  // LCD and battery Power Enable
@@ -118,7 +117,7 @@ static uint8_t stat_screen_count = 0;
 static SemaphoreHandle_t lcd_refreshing_sem = NULL;
 
 static void low_to_sleep(uint64_t sleep_time) {
-    LOGR
+    ILOG(TAG, "[%s]", __func__);
     gpio_set_direction((gpio_num_t)13, (gpio_mode_t)GPIO_MODE_OUTPUT);
     gpio_set_level((gpio_num_t)13, 1);  // flash in deepsleep, CS stays HIGH!!
     gpio_deep_sleep_hold_en();
@@ -129,7 +128,7 @@ static void low_to_sleep(uint64_t sleep_time) {
     if(cur_screen != CUR_SCREEN_OFF_SCREEN && cur_screen != CUR_SCREEN_SLEEP_SCREEN)
         displ_trigger_done = 1;
     while(1){
-        printf("** shutdown_progress %hhu, displ_trigger_done: %hhu\n", shutdown_progress, displ_trigger_done);
+        DLOG(TAG, "** [%s] shutdown_progress %hhu, displ_trigger_done: %hhu", __FUNCTION__, shutdown_progress, displ_trigger_done);
         if(_lvgl_lock(1000)){
             _lvgl_unlock();
         }
@@ -144,9 +143,9 @@ static void low_to_sleep(uint64_t sleep_time) {
     esp_timer_stop(button_timer);
     button_deinit();
     display_uninit(&display);
-    ESP_LOGI(TAG, "Setup ESP32 to sleep for every %d Seconds", (int)sleep_time);
+    ILOG(TAG, "[%s] getup logger to sleep for every %d seconds.", __func__, (int)sleep_time);
     //delay_ms(250);
-    ESP_LOGI(TAG, "Going to sleep now");
+    ILOG(TAG, "[%s] going to sleep now.", __func__);
     esp_deep_sleep(uS_TO_S_FACTOR * sleep_time);
 }
 
@@ -154,11 +153,11 @@ static void update_bat(uint8_t verbose) {
 #ifdef USE_CUSTOM_CALIBRATION_VAL
     m_context_rtc.RTC_voltage_bat = volt_read(m_context_rtc.RTC_calibration_bat);
     if (verbose)
-        ESP_LOGI(TAG, "[%s] Battery measured (computed:%.02f, required_min:%.02f, calibration:%.02f)\n", __FUNCTION__, m_context_rtc.RTC_voltage_bat, MINIMUM_VOLTAGE, m_context_rtc.RTC_calibration_bat);
+        DLOG(TAG, "[%s] computed:%.02f, required_min:%.02f, calibration:%.02f\n", __FUNCTION__, m_context_rtc.RTC_voltage_bat, MINIMUM_VOLTAGE, m_context_rtc.RTC_calibration_bat);
 #else
     m_context_rtc.RTC_voltage_bat = volt_read();
     if (verbose)
-        ESP_LOGI(TAG, "[%s] Battery measured (computed:%.02f, required_min:%.02f)\n", __FUNCTION__, m_context_rtc.RTC_voltage_bat, MINIMUM_VOLTAGE);
+        DLOG(TAG, "[%s] computed:%.02f, required_min:%.02f\n", __FUNCTION__, m_context_rtc.RTC_voltage_bat, MINIMUM_VOLTAGE);
 #endif
 }
 
@@ -178,7 +177,7 @@ static char * wakeup_reasons[] = {
 static bool screen_from_wakeup = false;
 static int wakeup_init() {
     int ret = 0;
-    TIMER_S
+    DMEAS_START();
     esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
 
     // First screen update call from wakeup
@@ -194,7 +193,7 @@ static int wakeup_init() {
 
     switch (wakeup_reason) {
         case ESP_SLEEP_WAKEUP_EXT0:
-            ESP_LOGI(TAG, "%s", wakeup_reasons[wakeup_reason]);
+            ILOG(TAG, "%s", wakeup_reasons[wakeup_reason]);
             gpio_set_direction((gpio_num_t)WAKE_UP_GPIO, GPIO_MODE_INPUT);
             gpio_set_pull_mode((gpio_num_t)WAKE_UP_GPIO, GPIO_PULLUP_ONLY);
             rtc_gpio_deinit(WAKE_UP_GPIO);  // was 39
@@ -204,40 +203,40 @@ static int wakeup_init() {
             delay_ms(ret); */
             break;
         case ESP_SLEEP_WAKEUP_EXT1:
-            ESP_LOGI(TAG, "%s", wakeup_reasons[wakeup_reason]);
+            ILOG(TAG, "%s", wakeup_reasons[wakeup_reason]);
             break;
         case ESP_SLEEP_WAKEUP_TIMER:
-            ESP_LOGI(TAG, "%s", wakeup_reasons[wakeup_reason]);
+            ILOG(TAG, "%s", wakeup_reasons[wakeup_reason]);
             app_mode = APP_MODE_SLEEP;
             // screen_cb(&display);
             goto lowbat;
             break;
         case ESP_SLEEP_WAKEUP_TOUCHPAD:
-            ESP_LOGI(TAG, "%s", wakeup_reasons[wakeup_reason]);
+            ILOG(TAG, "%s", wakeup_reasons[wakeup_reason]);
             break;
         case ESP_SLEEP_WAKEUP_ULP:
-            ESP_LOGI(TAG, "%s", wakeup_reasons[wakeup_reason]);
+            ILOG(TAG, "%s", wakeup_reasons[wakeup_reason]);
             break;
         default:
-            ESP_LOGI(TAG, "%s int: %d", wakeup_reasons[7], wakeup_reason);
+            ILOG(TAG, "%s int: %d", wakeup_reasons[7], wakeup_reason);
             /* ret += Boot_screen();
             delay_ms(ret); */
             break;
     }
     done:
-    TIMER_E
+    DMEAS_END(TAG, "[%s] took %llu us", __FUNCTION__);
     return ret;
 }
 
 static void go_to_restart() {
-    LOGR
+    ILOG(TAG, "[%s]", __func__);
         // m_context.request_restart = 0;
     delay_ms(2000);
     esp_restart();
 }
 
 static void go_to_sleep(uint64_t sleep_time) {
-    LOGR
+    ILOG(TAG, "[%s]", __func__);
     m_context.deep_sleep = true;
     if (wifi_status() > 0) {
         wifi_uninit();
@@ -262,7 +261,7 @@ static void go_to_sleep(uint64_t sleep_time) {
 static int shut_down_gps(int no_sleep) {
     if (!m_context.gps.ublox_config->ready && no_sleep) 
         return 0;
-    LOGR 
+    ILOG(TAG, "[%s]", __func__); 
     int ret = 0;
     if(m_context.gps.ublox_config->time_set)
             next_screen = CUR_SCREEN_SAVE_SESSION;
@@ -370,11 +369,7 @@ static void gps_periodic_timer_callback(void* arg) {
 #define MAX_Sacc_GPS_SPEED_OK  1   // max Sacc value for calculating speed, otherwise 0
 #define MAX_GPS_SPEED_OK  50       // max speed in m/s for calculating speed, otherwise 0
 
-#if defined(STATIC_DEBUG)
-#define MIN_SPEED_START_LOGGING 0 
-#else
 #define MIN_SPEED_START_LOGGING 2000  // was 2000 min speed in mm/s over 2 s before start logging naar SD 
-#endif
 
 #define TIME_DELAY_FIRST_FIX 10       // 10 navpvt messages before start logging
 
@@ -437,7 +432,7 @@ esp_err_t ubx_msg_do(ubx_msg_byte_ctx_t *mctx) {
                         if (gps->gps_speed > 1000) // log only when speed is above 1 m/s == 3.6 km/h
                             log_to_file(gps);  // here it is also printed to serial !!
                         push_gps_data(gps, &gps->Ublox, nav_pvt->lat / 10000000.0f, nav_pvt->lon / 10000000.0f, gps->gps_speed);
-                        gps->run_count = New_run_detection(gps, nav_pvt->heading / 100000.0f, gps->S2.avg_s);
+                        gps->run_count = new_run_detection(gps, nav_pvt->heading / 100000.0f, gps->S2.avg_s);
                         gps->alfa_window = alfa_indicator(gps, nav_pvt->heading / 100000.0f);
                         // new run detected, reset run distance
                         if (gps->run_count != gps->old_run_count) {
@@ -446,16 +441,16 @@ esp_err_t ubx_msg_do(ubx_msg_byte_ctx_t *mctx) {
                                 gps->Ublox.run_start_time = now;
                         }
                         gps->old_run_count = gps->run_count;
-                        Update_distance(gps, &gps->M100);
-                        Update_distance(gps, &gps->M250);
-                        Update_distance(gps, &gps->M500);
-                        Update_distance(gps, &gps->M1852);
-                        Update_speed(gps, &gps->S2);
-                        Update_speed(gps, &gps->s2);
-                        Update_speed(gps, &gps->S10);
-                        Update_speed(gps, &gps->s10);
-                        Update_speed(gps, &gps->S1800);
-                        Update_speed(gps, &gps->S3600);
+                        update_distance(gps, &gps->M100);
+                        update_distance(gps, &gps->M250);
+                        update_distance(gps, &gps->M500);
+                        update_distance(gps, &gps->M1852);
+                        update_speed(gps, &gps->S2);
+                        update_speed(gps, &gps->s2);
+                        update_speed(gps, &gps->S10);
+                        update_speed(gps, &gps->s10);
+                        update_speed(gps, &gps->S1800);
+                        update_speed(gps, &gps->S3600);
                         update_alfa_speed(gps, &gps->A250, &gps->M250);
                         update_alfa_speed(gps, &gps->A500, &gps->M500);
                         update_alfa_speed(gps, &gps->a500, &gps->M500);
@@ -492,7 +487,7 @@ static void gpsTask(void *parameter) {
     ubx_msg_t * ubxMessage = &ubx->ubx_msg;
     struct nav_pvt_s * nav_pvt = &ubxMessage->navPvt;
     uint8_t try_setup_times = 5;
-    LOGR
+    ILOG(TAG, "[%s]", __func__);
     task_memory_info("gpsTask");
 #ifdef GPS_TIMER_STATS
     if(gps_periodic_timer)
@@ -545,7 +540,7 @@ static void gpsTask(void *parameter) {
 #define BUTTON_CB_WAIT_BEFORE 210000
 
 static void button_timer_cb(void *arg) {
-    LOGR
+    ILOG(TAG, "[%s]", __func__);
     if(cur_screen == CUR_SCREEN_GPS_SPEED) {
         ESP_LOGI(TAG, "gps info next screen requested, cur: %hhu", m_context.config->speed_field);
         m_context.config->speed_field++;
@@ -563,7 +558,7 @@ static void button_timer_cb(void *arg) {
 static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
     uint32_t tm = time/1000;
     l_button_t *btn = 0;
-    LOGR
+    ILOG(TAG, "[%s]", __func__);
     //ESP_LOGI(TAG, "Button %d event: %d, time: %ld ms", num, ev, tm);
     switch (ev) {
     case L_BUTTON_UP:
@@ -588,8 +583,8 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
         } else if(num==1) {
             if(tm >= CONFIG_BTN_GPIO_INPUT_LONG_PRESS_TIME_MS) {
                 if (m_context.gps.ublox_config->ready && m_context.gps.ublox_config->signal_ok) {
-                    Reset_Time_stats(&m_context.gps.s10);
-                    Reset_Time_stats(&m_context.gps.s2);
+                    reset_time_stats(&m_context.gps.s10);
+                    reset_time_stats(&m_context.gps.s2);
                     reset_alfa_stats(&m_context.gps.a500);
                 }
             } else {
@@ -648,7 +643,7 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
 }
 
 uint32_t screen_cb(void* arg) {
-    LOGR
+    DLOG(TAG, "[%s]", __func__);
     if(xSemaphoreTake(lcd_refreshing_sem, 0) != pdTRUE)
         return 0;
     struct display_s *dspl = &display;
@@ -775,7 +770,7 @@ uint32_t screen_cb(void* arg) {
 
 // uint32_t time_to_next_sec = 0;
 // static void screenTask(void *parameter) {
-//     //LOGR
+//     //ILOG(TAG, "[%s]", __func__);
 //     int wifistatus;
 //     bool screen_active = true;
 //     int32_t now, emillis, elapsed;
@@ -911,7 +906,7 @@ static void init_watchdog() {
 #endif  // USE_WDT
 
 static void init_button() {
-    LOGR
+    ILOG(TAG, "[%s]", __func__);
     button_init();
     btns[0].cb = button_cb;
 #ifdef CONFIG_BTN_GPIO_INPUT_1_ACTIVE
@@ -928,12 +923,12 @@ void wifiTask() {
     task_memory_info("wifiTask");
     while (app_mode == APP_MODE_WIFI) {
         
-        if (loops++ > 100) {
 #ifdef DEBUG
-               task_memory_info("wifiTask");
-#endif          
-                loops = 0;
+        if (loops++ > 100) {
+            task_memory_info("wifiTask");
+            loops = 0;
         }
+#endif          
         if (m_context.request_restart) {
             app_mode = APP_MODE_RESTART;
         }
@@ -962,14 +957,14 @@ void app_mode_wifi_handler(int verbose) {
     app_mode = APP_MODE_WIFI;
     app_mode_wifi_on = 1;
     if (!wifi_context.Wifi_on) {
-        ESP_LOGI(TAG, "[%s] first turn wifi on", __FUNCTION__);
+        ILOG(TAG, "[%s] first turn wifi on", __FUNCTION__);
         wifi_init();
         wifi_context.offset = m_context.config->timezone;
         wifi_sta_set_config(m_context.config->ssid, m_context.config->password);
         wifi_sta_connect_scan();  // try station mode first
         // wifi_sta_connect(0);
         m_context.wifi_ap_timeout = 10;
-        ESP_LOGI(TAG, "[%s] wifi sta started.", __FUNCTION__);
+        ILOG(TAG, "[%s] wifi sta started.", __FUNCTION__);
     }
     task_memory_info("wifiStarter-main");
     xTaskCreate(wifiTask,   /* Task function. */
@@ -983,12 +978,12 @@ void app_mode_wifi_handler(int verbose) {
 void app_mode_gps_handler(int verbose) {
     if (t1)
         return;
-    TIMER_S
+    DMEAS_START();
     app_mode = APP_MODE_GPS;
     if (wifi_status() > 0 || wifi_context.Wifi_on == true) {
         wifi_context.Wifi_on = 0;
         if (!ota_notrunning) {
-            ESP_LOGI(TAG, "[%s] wifi turn off ap", __FUNCTION__);
+            ILOG(TAG, "[%s] wifi turn off ap", __FUNCTION__);
             // wifi_disconnect();
             // esp_wifi_stop();
             wifi_uninit();
@@ -1009,7 +1004,7 @@ void app_mode_gps_handler(int verbose) {
                 19,         /* Priority of the task. */
                 &t1, 1);      /* Task handle. */
     end:
-    TIMER_E
+    DMEAS_END(TAG, "[%s] took %llu us", __FUNCTION__);
 }
 
 void task_app_mode_handler(int verbose) {
@@ -1283,7 +1278,7 @@ void sd_mount_cb(void* arg) {
 }
 
 static void setup(void) {
-    TIMER_S
+    DMEAS_START();
     app_mode = APP_MODE_BOOT;
     int ret = 0;
 
@@ -1351,9 +1346,9 @@ static void setup(void) {
 #endif
 
 #if defined(DEBUG)
-    ESP_LOGI(TAG, "[%s] verbose mode build.", __FUNCTION__);
+    ESP_LOGI(TAG, "[%s] verbosity mode from common module %d.", __FUNCTION__, CONFIG_LOGGER_COMMON_LOG_LEVEL);
 #elif defined(NDEBUG)
-    ESP_LOGI(TAG, "[%s] silent mode build.", __FUNCTION__);
+    ESP_LOGI(TAG, "[%s] silent mode.", __FUNCTION__);
 #else
     ESP_LOGW(TAG, "[%s] build debug mode not set.", __FUNCTION__);
 #endif
@@ -1368,7 +1363,7 @@ static void setup(void) {
     ESP_ERROR_CHECK(esp_timer_create(&gps_periodic_timer_args, &gps_periodic_timer));
 #endif
 
-    TIMER_E
+    DMEAS_END(TAG, "[%s] took %llu us", __FUNCTION__);
 }
 
 // static char rtbuf[BUFSIZ];
@@ -1377,18 +1372,7 @@ void app_main(void) {
     // rtc_wdt_protect_off();
     setup();
     uint8_t verbose = 0;
-    /* uint32_t moment = 0;
-    int8_t llevel=100;
-    uint32_t lv_timeer=0; */
     while (1) {
-        //millis = get_millis();
-        /* moment = get_millis();
-        if(lv_timeer<moment) {
-            lv_timeer = moment + 1000;
-            driver_st7789_bl_set(llevel);
-            llevel-=20;
-            if(llevel<0) llevel=100;
-        } */
         if (loops++ > 100) {
 #ifdef DEBUG
             task_top();

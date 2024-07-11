@@ -52,7 +52,6 @@ static esp_err_t bmx_read() {
 // static void bmx_task() {
 static void periodic_timer_callback(void *arg) {
     // while (bmx_run) {
-        //LOGR;
         bmx_read();
     //    task_memory_info("bmxTimer");
     //     delay_ms(BMX_INTERVAL_SEC * 1000U);
@@ -61,7 +60,6 @@ static void periodic_timer_callback(void *arg) {
 }
 
 esp_err_t init_bmx() {
-    LOGR;
     esp_err_t ret = ESP_OK;
     i2c_config_t i2c_cfg = {
         .mode = I2C_MODE_MASTER,
@@ -113,7 +111,6 @@ esp_err_t init_bmx() {
 }
 
 void deinit_bmx() {
-    LOGR;
     vTaskDelete(t1);
     bmx280_close(bmx280);
 }
