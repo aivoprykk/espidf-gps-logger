@@ -64,7 +64,7 @@ struct display_priv_s {
 
 struct display_priv_s display_priv = {{false}, 0, 0, 0, 0, false};
 
-static const char *TAG = "display";
+static const char *TAG = "lcd";
 
 static esp_err_t reset_display_state(struct display_state_s *display_state) {
     ILOG(TAG, "[%s]", __func__);
@@ -83,8 +83,8 @@ static uint32_t _boot_screen(const struct display_s *me) {
 }
 static uint32_t _off_screen(const struct display_s *me, int choice) {
     ILOG(TAG, "[%s]", __func__);
-        uint32_t milli = get_millis();
-        float session_time = (milli - m_context.gps.start_logging_millis) / 1000;
+        float session_time = (get_millis() - m_context.gps.ublox_config->ready_time) / 1000;
+        float distance = m_context.gps.Ublox.total_distance / 1000000;
         const char *title = m_context.request_restart ? "Reboot device" : m_context.Shut_down_Save_session ? 0 : "Going to sleep";
         if (session_time > 0) {
             ESP_LOGD(TAG, "session time: %.2f s", session_time);
@@ -92,8 +92,15 @@ static uint32_t _off_screen(const struct display_s *me, int choice) {
         if(m_context.low_bat_count > 5) {
             showLowBatScreen();
         } else {
-            if(!title)
-                showSaveSessionScreen();
+            if(!title) {
+                char tmp[24]={0}, *p = tmp, tmpb[24]={0}, *pb = tmpb;
+                memcpy(p, "Time: ", 6), p += 6;
+                sec_to_hms_str(session_time, p), p=tmp;
+                memcpy(pb, "Distance: ", 10), pb += 10;
+                pb += f2_to_char(distance, pb);
+                memcpy(pb, " km", 3), pb+=3, *pb = 0, pb=tmpb;
+                showSaveSessionScreen("Save session", p, pb);
+            }
             else
                 showBootScreen(title);
         }
@@ -606,7 +613,7 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
     lv_obj_t *panel;
     if ((panel = statusbar->gps_image)) {
         char tmp[24]={0}, *p = tmp;
-        if ((m_context.gps.ublox_config->ready && m_context.gps.ublox_config->signal_ok)) {
+        if ((m_context.gps.ublox_config->is_on)) {
             if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
                 lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
             }
@@ -618,7 +625,7 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
         }
         //if(statusbar->viewmode==2) { 
             if (!m_context.gps.ublox_config->ready){
-                memcpy(p, "gps fail", 8);
+                memcpy(p, "-n-", 3);
             }
             // else if(!m_context.gps.ublox_config->signal_ok) {
             //     uint8_t qp = gblink;
@@ -688,7 +695,7 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
         // TIMER_S
         // char sz[64];
         logger_config_t *config = m_context.config;
-        char tmp[24] = {0}, *p = tmp, tmpb[24]={0}, *pb = tmpb;
+        char tmp[24] = {0}, *p = tmp, tmpb[24]={0}, *pb = tmpb, tmpc[24]={0}, *pc = tmpc;
         bool is_gps_stat_screen = (screen_mode > 0 && screen_mode < 10);
         me->self->state.update_delay = 500;
         // ESP_LOGI(TAG, "update screen: mode:%" PRIu8 ", update nr:%lu", screen_mode, count);
@@ -699,6 +706,7 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
         const char *gps = 0;
         size_t gpslen=0;
         const lv_img_dsc_t *img_src = 0;
+        const char * scr_mode_str = "Screen mode ";
         switch (screen_mode) {
             case SCREEN_MODE_GPS_TROUBLE:
                 showGpsTroubleScreen();
@@ -714,24 +722,29 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 }
                 else {
                     img_src = &near_me_bold_48px;
-                    *p = '@';
-                    ++p;
+                    *p++ = '@';
                     p += xltoa(m_context.config->sample_rate, p);
-                    memcpy(p, "Hz", 2);
-                    p += 2;
+                    memcpy(p, "Hz", 2), p += 2;
                 }
                 *p = 0;
                 p = tmp;
                 
+                memcpy(pb, "Bat: ", 5), pb += 5;
                 pb += f3_to_char(m_context_rtc.RTC_voltage_bat, pb);
-                memcpy(pb, "V ", 2);
-                pb += 2;
+                memcpy(pb, "V, ", 3), pb += 3;
                 pb += xltoa(m_context.gps.ublox_config->ubx_msg.navPvt.numSV, pb);
-                memcpy(pb, "sat", 3);
-                pb += 3;
-                *pb = 0;
+                memcpy(pb, "sats ", 5), pb += 5, *pb = 0;
                 pb=tmpb;
-                showGpsScreen(p, pb, img_src, gps_image_angle);
+
+                if(m_context.gps.ublox_config->first_fix > 0){
+                    memcpy(pc, "Fix: ", 5), pc += 5;
+                    pc += xultoa(m_context.gps.ublox_config->first_fix, pc);
+                    memcpy(pc, " s, runs: ", 10), pc += 10;
+                    pc += xultoa(m_context.gps.run_count-1, pc), *pc=0;
+                    pc = tmpc;
+                }
+
+                showGpsScreen(p, pb, pc, img_src, gps_image_angle);
                 statusbar_update();
 
 #if defined(CONFIG_DISPLAY_DRIVER_ST7789)
@@ -777,7 +790,8 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                     *(p+4) = 0;
                 }
                 else if(m_context.gps.S2.avg_s < 1000) {
-                    f2_to_char(0.0, p);
+                    memcpy(p, "0.00", 4);
+                    *(p+4) = 0;
                 } else if(gpsspd < 100)
                     f2_to_char(gpsspd, p);
                 else
@@ -792,38 +806,40 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 goto link_for_screen_mode_speed_2;
                 break;
             case SCREEN_MODE_SPEED_STATS_1:
-                ESP_LOGW(TAG, "Screen mode stats 1, 10s: %d", screen_mode);
+                DLOG(TAG, "[%] %s, stat 10s: %d", __func__, scr_mode_str, screen_mode);
                 sc_data = &sc_screens[0];
                 break;
             case SCREEN_MODE_SPEED_STATS_2:
-                ESP_LOGW(TAG, "Screen mode stats 2, avg: %d", screen_mode);
+                DLOG(TAG, "[%] %s, stat avg: %d", __func__, scr_mode_str, screen_mode);
                 sc_data = &sc_screens[1];
                 break;
             case SCREEN_MODE_SPEED_STATS_3:
-                ESP_LOGW(TAG, "Screen mode stats 3, stats: %d", screen_mode);
+                DLOG(TAG, "[%] %s, stat stats: %d", __func__, scr_mode_str, screen_mode);
                 sc_data = &sc_screens[2];
                 break;
             case SCREEN_MODE_SPEED_STATS_4:
-                ESP_LOGW(TAG, "Screen mode stats 4, 500m: %d", screen_mode);
+                DLOG(TAG, "[%] %s, stat 500m: %d", __func__, scr_mode_str, screen_mode);
                 sc_data = &sc_screens[3];
                 break;
             case SCREEN_MODE_SPEED_STATS_5:
-                ESP_LOGW(TAG, "Screen mode stats 5, 250m: %d", screen_mode);
+                DLOG(TAG, "[%] %s, stat 250m: %d", __func__, scr_mode_str, screen_mode);
                 sc_data = &sc_screens[4];
                 break;
             case SCREEN_MODE_SPEED_STATS_6:
-                ESP_LOGW(TAG, "Screen mode stats 6, Alpha avg: %d", screen_mode);
+                DLOG(TAG, "[%] %s, stat Alpha avg: %d", __func__, scr_mode_str, screen_mode);
                 sc_data = &sc_screens[5];
                 break;
             case SCREEN_MODE_SPEED_STATS_7:
             case SCREEN_MODE_SPEED_STATS_8:
             case SCREEN_MODE_SPEED_STATS_9:
+                DLOG(TAG, "[%] %s, stat - %d", __func__, scr_mode_str, screen_mode);
                 break;
             case SCREEN_MODE_WIFI_START:
             case SCREEN_MODE_WIFI_AP:
             case SCREEN_MODE_WIFI_STATION:
+                DLOG(TAG, "[%] %s, wifi %d", __func__, scr_mode_str, screen_mode);
                 me->self->state.update_delay = 1000;
-                showWifiScreen(wifi_context.s_ap_connection ? wifi_context.ap.ssid : wifi_context.stas[0].ssid, wifi_context.ip_address);
+                showWifiScreen(wifi_context.s_ap_connection ? wifi_context.ap.ssid : wifi_context.stas[0].ssid, wifi_context.ip_address, wifi_context.s_ap_connection ? "password" : "");
                 statusbar_update();
 #if defined(CONFIG_DISPLAY_DRIVER_ST7789)
                 lv_obj_set_style_img_recolor(ui_info_screen.info_img, lv_color_hex(0x104951), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -832,17 +848,29 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 break;
             case SCREEN_MODE_RECORD:
                 me->self->state.update_delay = 1000;
-                showRecordScreen();
+                const struct record_forwarder_s *rec = arg;
+                showRecordScreen(rec->num);
+                if(arg) {
+                    panel = ui_record_screen.prev_lbl;
+                    gpsspd = rec->prev->value.num() * m_context_rtc.RTC_calibration_speed;
+                    f2_to_char(gpsspd, p);
+                    lv_label_set_text(panel, p);
+                    panel = ui_record_screen.cur_lbl;
+                    gpsspd = rec->cur->value.num() * m_context_rtc.RTC_calibration_speed;
+                    f2_to_char(gpsspd, p);
+                    lv_label_set_text(panel, p);
+                    panel = ui_record_screen.info_lbl;
+                    lv_label_set_text(panel, rec->cur->grp);
+                }
                 break;
             default:
                 break;
         }
         if (is_gps_stat_screen) {
-           //ui_flush_screens(&ui_stats_screen.screen);
-            // lv_scr_load(UI_STATS_SCREEN);
+            const char * f_name = 0;
             if (sc_data->num_fields == 6) {
                 showStatsScreen32();
-                ESP_LOGI(TAG, "6Field stats panel eq 3Rowx2Slots");
+                DLOG(TAG, "[%s] stats panel: 3Row x 2Slot", __func__);
                 //lv_obj_add_flag(ui_StatsPanel4Row, LV_OBJ_FLAG_HIDDEN);
                 // 1. left slot
                 // parent= ui_Stats3Row1LeftPanel;
@@ -864,8 +892,9 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 lv_label_set_text(panel, p);
                 // panel = ui_comp_get_child(parent, UI_COMP_SMALLDATAPANEL_INFOLABEL);
                 panel = ui_stats_screen.cells[0][1].info;
-                if(strcmp(lv_label_get_text(panel), sc_data->fields[3].field->abbr))
-                    lv_label_set_text(panel, sc_data->fields[3].field->abbr);
+                f_name = sc_data->use_abbr ? sc_data->fields[3].field->abbr : sc_data->fields[3].field->name;
+                if(strcmp(lv_label_get_text(panel), f_name))
+                    lv_label_set_text(panel, f_name);
                 // 2. left slot
                 // parent=ui_Stats3Row2LeftPanel;
                 gpsspd = sc_data->fields[1].field->value.num() * m_context_rtc.RTC_calibration_speed;
@@ -875,8 +904,9 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 lv_label_set_text(panel, p);
                 // panel = ui_comp_get_child(parent, UI_COMP_SMALLDATAPANEL_INFOLABEL);
                 panel = ui_stats_screen.cells[1][0].info;
-                if(strcmp(lv_label_get_text(panel), sc_data->fields[1].field->abbr))
-                    lv_label_set_text(panel, sc_data->fields[1].field->abbr);
+                f_name = sc_data->use_abbr ? sc_data->fields[1].field->abbr : sc_data->fields[1].field->name;
+                if(strcmp(lv_label_get_text(panel), f_name))
+                    lv_label_set_text(panel, f_name);
                 // 2. right slot
                 // parent=ui_Stats3Row2RightPanel;
                 gpsspd = sc_data->fields[4].field->value.num() * m_context_rtc.RTC_calibration_speed;
@@ -886,8 +916,9 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 lv_label_set_text(panel, p);
                 // panel = ui_comp_get_child(parent, UI_COMP_SMALLDATAPANEL_INFOLABEL);
                 panel = ui_stats_screen.cells[1][1].info;
-                if(strcmp(lv_label_get_text(panel), sc_data->fields[4].field->abbr))
-                    lv_label_set_text(panel, sc_data->fields[4].field->abbr);
+                f_name = sc_data->use_abbr ? sc_data->fields[4].field->abbr : sc_data->fields[4].field->name;
+                if(strcmp(lv_label_get_text(panel), f_name))
+                    lv_label_set_text(panel, f_name);
                 // 3. left slot
                 // parent=ui_Stats3Row3LeftPanel;
                 gpsspd = sc_data->fields[2].field->value.num() * m_context_rtc.RTC_calibration_speed;
@@ -897,8 +928,9 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 lv_label_set_text(panel, p);
                 // panel = ui_comp_get_child(parent, UI_COMP_SMALLDATAPANEL_INFOLABEL);
                 panel = ui_stats_screen.cells[2][0].info;
-                if(strcmp(lv_label_get_text(panel), sc_data->fields[2].field->abbr))
-                    lv_label_set_text(panel, sc_data->fields[2].field->abbr);
+                f_name = sc_data->use_abbr ? sc_data->fields[2].field->abbr : sc_data->fields[2].field->name;
+                if(strcmp(lv_label_get_text(panel), f_name))
+                    lv_label_set_text(panel, f_name);
                 // 3. right slot
                 // parent=ui_Stats3Row3RightPanel;
                 gpsspd = sc_data->fields[5].field->value.num() * m_context_rtc.RTC_calibration_speed;
@@ -908,12 +940,13 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 lv_label_set_text(panel, p);
                 // panel = ui_comp_get_child(parent, UI_COMP_SMALLDATAPANEL_INFOLABEL);
                 panel = ui_stats_screen.cells[2][1].info;
-                if(strcmp(lv_label_get_text(panel), sc_data->fields[5].field->abbr))
-                    lv_label_set_text(panel, sc_data->fields[5].field->abbr);
+                f_name = sc_data->use_abbr ? sc_data->fields[5].field->abbr : sc_data->fields[5].field->name;
+                if(strcmp(lv_label_get_text(panel), f_name))
+                    lv_label_set_text(panel, f_name);
             } 
             else if (sc_data->num_fields == 4) {
                 showStatsScreen22();
-                ESP_LOGI(TAG, "3Field stats panel eq 2Rowx2lots");
+                DLOG(TAG, "[%s] stats panel: 2Row x 2Slot", __func__);
                 //lv_obj_add_flag(ui_StatsPanel4Row, LV_OBJ_FLAG_HIDDEN);
                 // 1. left slot
                 // parent= ui_Stats3Row1LeftPanel;
@@ -935,8 +968,9 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 lv_label_set_text(panel, p);
                 // panel = ui_comp_get_child(parent, UI_COMP_SMALLDATAPANEL_INFOLABEL);
                 panel = ui_stats_screen.cells[0][1].info;
-                if(strcmp(lv_label_get_text(panel), sc_data->fields[1].field->abbr))
-                    lv_label_set_text(panel, sc_data->fields[1].field->abbr);
+                f_name = sc_data->use_abbr ? sc_data->fields[1].field->abbr : sc_data->fields[1].field->name;
+                if(strcmp(lv_label_get_text(panel), f_name))
+                    lv_label_set_text(panel, f_name);
                 // 2. left slot
                 // parent=ui_Stats3Row2LeftPanel;
                 gpsspd = sc_data->fields[2].field->value.num() * m_context_rtc.RTC_calibration_speed;
@@ -946,8 +980,9 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 lv_label_set_text(panel, p);
                 // panel = ui_comp_get_child(parent, UI_COMP_SMALLDATAPANEL_INFOLABEL);
                 panel = ui_stats_screen.cells[1][0].info;
-                if(strcmp(lv_label_get_text(panel), sc_data->fields[2].field->abbr))
-                    lv_label_set_text(panel, sc_data->fields[2].field->abbr);
+                f_name = sc_data->use_abbr ? sc_data->fields[2].field->abbr : sc_data->fields[2].field->name;
+                if(strcmp(lv_label_get_text(panel), f_name))
+                    lv_label_set_text(panel, f_name);
                 // 2. right slot
                 // parent=ui_Stats3Row2LeftPanel;
                 gpsspd = sc_data->fields[3].field->value.num() * m_context_rtc.RTC_calibration_speed;
@@ -957,10 +992,11 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 lv_label_set_text(panel, p);
                 // panel = ui_comp_get_child(parent, UI_COMP_SMALLDATAPANEL_INFOLABEL);
                 panel = ui_stats_screen.cells[1][1].info;
-                if(strcmp(lv_label_get_text(panel), sc_data->fields[3].field->abbr))
-                    lv_label_set_text(panel, sc_data->fields[3].field->abbr);
+                f_name = sc_data->use_abbr ? sc_data->fields[3].field->abbr : sc_data->fields[3].field->name;
+                if(strcmp(lv_label_get_text(panel), f_name))
+                    lv_label_set_text(panel, f_name);
             } else {
-                ESP_LOGI(TAG, "2Field stats panel eq 2Rowx1+2Slots");
+                DLOG(TAG, "[%s] stats panel: 3Row x 1Slot", __func__);
                 loadStatsScreen(3,1);
                 //lv_obj_clear_flag(ui_StatsPanel4Row, LV_OBJ_FLAG_HIDDEN);
                 // 1. full last run
@@ -983,8 +1019,9 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 lv_label_set_text(panel, p);
                 // panel = ui_comp_get_child(parent, UI_COMP_SMALLDATAPANEL_INFOLABEL);
                 panel = ui_stats_screen.cells[1][0].info;
-                if(strcmp(lv_label_get_text(panel), sc_data->fields[1].field->abbr))
-                    lv_label_set_text(panel, sc_data->fields[1].field->abbr);
+                f_name = sc_data->use_abbr ? sc_data->fields[1].field->abbr : sc_data->fields[1].field->name;
+                if(strcmp(lv_label_get_text(panel), f_name))
+                    lv_label_set_text(panel, f_name);
                 // 3. avg run
                 // parent=ui_Stats2Row2RightPanel;
                 gpsspd = sc_data->fields[2].field->value.num() * m_context_rtc.RTC_calibration_speed;
@@ -994,8 +1031,9 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 lv_label_set_text(panel, p);
                 // panel = ui_comp_get_child(parent, UI_COMP_SMALLDATAPANEL_INFOLABEL);
                 panel = ui_stats_screen.cells[2][0].info;
-                if(strcmp(lv_label_get_text(panel), sc_data->fields[2].field->abbr))
-                    lv_label_set_text(panel, sc_data->fields[2].field->abbr);
+                f_name = sc_data->use_abbr ? sc_data->fields[2].field->abbr : sc_data->fields[2].field->name;
+                if(strcmp(lv_label_get_text(panel), f_name))
+                    lv_label_set_text(panel, f_name);
             }
             statusbar_update();
         }

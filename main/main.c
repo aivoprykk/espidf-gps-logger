@@ -74,10 +74,6 @@ ESP_EVENT_DEFINE_BASE(LOGGER_EVENT);
 
 #define EEPROM_SIZE 1              // use 1 unsigned char in eeprom for saving type of ublox
 
-#ifndef MINIMUM_VOLTAGE
-#define MINIMUM_VOLTAGE 3.2  // if lower then minimum_voltage, back to sleep.....
-#endif
-
 static const char *TAG = "main";
 
 struct logger_config_s * m_config = 0;
@@ -186,6 +182,7 @@ static int wakeup_init() {
 
     if (m_context_rtc.RTC_voltage_bat < MINIMUM_VOLTAGE) {
         lowbat:
+        app_mode = APP_MODE_SLEEP;
         esp_sleep_enable_ext0_wakeup(WAKE_UP_GPIO, 0);
         low_to_sleep(TIME_TO_SLEEP);
         goto done;
@@ -207,7 +204,6 @@ static int wakeup_init() {
             break;
         case ESP_SLEEP_WAKEUP_TIMER:
             ILOG(TAG, "%s", wakeup_reasons[wakeup_reason]);
-            app_mode = APP_MODE_SLEEP;
             // screen_cb(&display);
             goto lowbat;
             break;
@@ -437,8 +433,10 @@ esp_err_t ubx_msg_do(ubx_msg_byte_ctx_t *mctx) {
                         // new run detected, reset run distance
                         if (gps->run_count != gps->old_run_count) {
                             gps->Ublox.run_distance = 0;
-                            if (gps->gps_speed / 1000.0f > MAX_GPS_SPEED_OK)
+                            if (gps->gps_speed / 1000.0f > MAX_GPS_SPEED_OK){
                                 gps->Ublox.run_start_time = now;
+                                gps->record = 0;
+                            }
                         }
                         gps->old_run_count = gps->run_count;
                         update_distance(gps, &gps->M100);
@@ -514,7 +512,7 @@ static void gpsTask(void *parameter) {
             }
             if(ubx_fail_count>50) {
                 if(!ubxMessage->mon_ver.hwVersion[0]) // only when no hwVersion is received
-                    app_mode = APP_MODE_WIFI;
+                    app_mode = APP_MODE_RESTART;
                 else
                     ubx_fail_count = 0;
             }
@@ -642,6 +640,7 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
     }
 }
 
+static uint8_t record_done = 255;
 uint32_t screen_cb(void* arg) {
     DLOG(TAG, "[%s]", __func__);
     if(xSemaphoreTake(lcd_refreshing_sem, 0) != pdTRUE)
@@ -692,7 +691,7 @@ uint32_t screen_cb(void* arg) {
     } else if (m_context.boot_screen_stage || app_mode <= APP_MODE_BOOT) {
         op->boot_screen(dspl);
         m_context.boot_screen_stage = m_context.boot_screen_stage > 4 ? 0 : m_context.boot_screen_stage + 1;
-    } else if (m_context.low_bat_count > 6) { // 6 * 10sec = 1 min
+    } else if (m_context.low_bat_count > 6) {
         op->off_screen(dspl, m_context_rtc.RTC_OFF_screen);
         cur_screen = CUR_SCREEN_OFF_SCREEN;
         delay=1000;
@@ -739,7 +738,50 @@ uint32_t screen_cb(void* arg) {
             op->update_screen(dspl, m_context.gpio12_screen[m_context.gpio12_screen_cur], 0);
         }  // heeft voorrang, na drukken GPIO_pin 12, 10 STAT4 scherm !!!
 #endif */       
-        else if (!run_is_active && (m_context.gps.S2.display_max_speed  > 1000 || next_screen == CUR_SCREEN_GPS_STATS)) { 
+        else if (!run_is_active && (m_context.gps.S2.display_max_speed  > 1000 || next_screen == CUR_SCREEN_GPS_STATS)) {
+            delay=500;
+            if (m_context.gps.record && record_done == 255) {
+                if(m_context.gps.S2.display_max_speed > 10000) // when more than 32k/h show records
+                    record_done=0;
+                m_context.gps.record = 0;
+            }
+            if (m_context.gps.S10.record && record_done < 2) { // 10sec max record
+                struct record_forwarder_s r = { &avail_fields[16], &avail_fields[17], record_done==0};
+                op->update_screen(dspl, SCREEN_MODE_RECORD, &r);
+                ++record_done;
+                goto end;
+            }
+            else if (m_context.gps.S2.record && record_done < 4) { // 2sec max record
+                if(record_done<2) record_done = 2;
+                struct record_forwarder_s r = { &avail_fields[47], &avail_fields[48] , record_done==2};
+                op->update_screen(dspl, SCREEN_MODE_RECORD, &r);
+                ++record_done;
+                goto end;
+            }
+            else if (m_context.gps.M500.record && record_done < 6) { // 500m max record
+                if(record_done<4) record_done = 4;
+                struct record_forwarder_s r = { &avail_fields[53], &avail_fields[54] , record_done==4};
+                op->update_screen(dspl, SCREEN_MODE_RECORD, &r);
+                ++record_done;
+                goto end;
+            }
+            else if (m_context.gps.M1852.record && record_done < 8) { // 1852m max record
+                if(record_done<6) record_done = 6;
+                struct record_forwarder_s r = { &avail_fields[55], &avail_fields[56] , record_done==6};
+                op->update_screen(dspl, SCREEN_MODE_RECORD, &r);
+                ++record_done;
+                goto end;
+            }
+             else if (m_context.gps.A500.record && record_done < 10) { // 500m alfa max record
+                if(record_done<8) record_done = 8;
+                struct record_forwarder_s r = { &avail_fields[42], &avail_fields[43] , record_done==8};
+                op->update_screen(dspl, SCREEN_MODE_RECORD, &r);
+                ++record_done;
+                goto end;
+            }
+            else if(record_done < 240) {
+                record_done = 240;
+            }
             // lower than 5 km/h
             if (m_context.stat_screen_cur >= stat_screen_count) {
                 m_context.stat_screen_cur = 0;  // screen_count = 2
@@ -747,7 +789,6 @@ uint32_t screen_cb(void* arg) {
             const uint8_t sc = (m_context.stat_screen_cur >= m_context.stat_screen_count) ? m_context.stat_screen_cur+1 : m_context.stat_screen[m_context.stat_screen_cur];
             op->update_screen(dspl, sc, 0);
             cur_screen = CUR_SCREEN_GPS_STATS;
-            delay=500;
         } else {
             if (m_context.config->speed_large_font == 2) {
                     op->update_screen(dspl, SCREEN_MODE_SPEED_2, 0);
@@ -758,6 +799,7 @@ uint32_t screen_cb(void* arg) {
             m_context.stat_screen_cur = 0;
             stat_screen_count = m_context.stat_screen_count;
             cur_screen = CUR_SCREEN_GPS_SPEED;
+            record_done = 255;
         }
     }
     end:

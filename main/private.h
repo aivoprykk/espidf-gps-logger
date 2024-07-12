@@ -2,6 +2,8 @@
 #define FAF00DDB_D330_462A_8A1C_425EBCE204D4
 
 #include <stdio.h>
+#include <stdint.h>
+#include <stdbool.h>
 
 #include "sdkconfig.h"
 
@@ -10,6 +12,9 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#define MINIMUM_VOLTAGE 3.25
+#define LOW_BAT_COUNT 20
 
 #ifndef MILLIS
 #define MILLIS(x) (int64_t)(x).tv_sec * 1000000L + (int64_t)(x).tv_usec;
@@ -71,7 +76,7 @@ uint32_t screen_cb(void* arg);
 
 #endif
 
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL == CONFIG_LOGGER_COMMON_LOG_LEVEL_TRACE) // "A lot of logs to give detailed information"
+#if defined(CONFIG_LOGGER_COMMON_LOG_LEVEL_TRACE) // "A lot of logs to give detailed information"
 
 #define DLOG LOG_INFO
 #define DMEAS_START MEAS_START
@@ -83,7 +88,7 @@ uint32_t screen_cb(void* arg);
 #define WMEAS_START MEAS_START
 #define WMEAS_END MEAS_END
 
-#elif (CONFIG_LOGGER_COMMON_LOG_LEVEL == CONFIG_LOGGER_COMMON_LOG_LEVEL_INFO) // "Log important events"
+#elif defined(CONFIG_LOGGER_COMMON_LOG_LEVEL_INFO) // "Log important events"
 
 #define DLOG(a, b, ...) ((void)0)
 #define DMEAS_START() ((void)0)
@@ -94,7 +99,7 @@ uint32_t screen_cb(void* arg);
 #define WMEAS_START MEAS_START
 #define WMEAS_END MEAS_END
 
-#elif (CONFIG_LOGGER_COMMON_LOG_LEVEL == CONFIG_LOGGER_COMMON_LOG_LEVEL_WARN) // "Log if something unwanted happened but didn't cause a problem"
+#elif defined(CONFIG_LOGGER_COMMON_LOG_LEVEL_WARN) // "Log if something unwanted happened but didn't cause a problem"
 
 #define DLOG(a, b, ...) ((void)0)
 #define DMEAS_START() ((void)0)
@@ -118,6 +123,12 @@ uint32_t screen_cb(void* arg);
 #define WMEAS_START() ((void)0)
 #define WMEAS_END(a, b, ...) ((void)0)
 #endif
+
+struct record_forwarder_s {
+    const struct screen_f_s * cur;
+    const struct screen_f_s * prev;
+    bool num;
+};
 
 #ifdef __cplusplus
 }

@@ -46,7 +46,6 @@ typedef enum {
 } screen_mode_t;
 
 #define IS_STAT_SCREEN(screen) (screen >= SCREEN_MODE_SPEED_STATS_1 && screen <= SCREEN_MODE_SPEED_STATS_9)
-#define MINIMUM_VOLTAGE 3.2
 
 struct display_priv_s;
 typedef struct display_priv_s display_priv_t;

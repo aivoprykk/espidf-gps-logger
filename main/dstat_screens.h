@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,12 +27,12 @@ typedef struct screen_f_s {
     } value;
     const char *name;
     const char *abbr;
-    uint8_t name_len;
+    const char *grp;
 } screen_f_t;
 
 #define SCREEN_FIELD_MAX_LEN 16
 typedef struct screen_field_s {
-    screen_f_t *field;
+    const screen_f_t *field;
     char data[SCREEN_FIELD_MAX_LEN];
     uint32_t dlen;
 } screen_field_t;
@@ -39,13 +40,16 @@ typedef struct screen_field_s {
 typedef struct stat_screen_s {
     uint8_t cols;
     uint8_t rows;
-    screen_field_t fields[12];
+    const screen_field_t fields[12];
     uint8_t num_fields;
+    bool use_abbr;
 } stat_screen_t;
 
 // #define STAT_SCREENS_NUM 7
 uint8_t get_stat_screens_count(void);
 //uint8_t get_time(char *p1, uint8_t hour, uint8_t min);
+
+extern const screen_f_t avail_fields[];
 
 #ifdef __cplusplus
 }
