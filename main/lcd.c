@@ -687,6 +687,16 @@ static void statusbar_update() {
     statusbar_gps_cb(0);
 }
 
+typedef struct sat_count_s {
+    uint8_t gps;
+    uint8_t sbas;
+    uint8_t galileo;
+    uint8_t beidou;
+    uint8_t qzss;
+    uint8_t glonass;
+    uint8_t navic;
+} sat_count_t;
+
 static uint32_t _update_screen(const struct display_s *me, const screen_mode_t screen_mode, void *arg) {
     ILOG(TAG, "[%s]", __func__);
     uint32_t ret = 50;
@@ -695,7 +705,7 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
         // TIMER_S
         // char sz[64];
         logger_config_t *config = m_context.config;
-        char tmp[24] = {0}, *p = tmp, tmpb[24]={0}, *pb = tmpb, tmpc[24]={0}, *pc = tmpc;
+        char tmp[24] = {0}, *p = tmp, tmpb[32]={0}, *pb = tmpb, tmpc[24]={0}, *pc = tmpc;
         bool is_gps_stat_screen = (screen_mode > 0 && screen_mode < 10);
         me->self->state.update_delay = 500;
         // ESP_LOGI(TAG, "update screen: mode:%" PRIu8 ", update nr:%lu", screen_mode, count);
@@ -723,7 +733,7 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 else {
                     img_src = &near_me_bold_48px;
                     *p++ = '@';
-                    p += xltoa(m_context.config->sample_rate, p);
+                    p += xltoa(m_context.gps.ublox_config->rtc_conf->output_rate, p);
                     memcpy(p, "Hz", 2), p += 2;
                 }
                 *p = 0;
@@ -732,18 +742,79 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 memcpy(pb, "Bat: ", 5), pb += 5;
                 pb += f3_to_char(m_context_rtc.RTC_voltage_bat, pb);
                 memcpy(pb, "V, ", 3), pb += 3;
-                pb += xltoa(m_context.gps.ublox_config->ubx_msg.navPvt.numSV, pb);
-                memcpy(pb, "sats ", 5), pb += 5, *pb = 0;
-                pb=tmpb;
+                
+                memcpy(pb, "runs: ", 6), pb += 6;
+                pb += xultoa(m_context.gps.run_count-(m_context.gps.run_count ? 1 : 0), pb), *pb=0;
+                pb = tmpb;
 
                 if(m_context.gps.ublox_config->first_fix > 0){
                     memcpy(pc, "Fix: ", 5), pc += 5;
                     pc += xultoa(m_context.gps.ublox_config->first_fix, pc);
-                    memcpy(pc, " s, runs: ", 10), pc += 10;
-                    pc += xultoa(m_context.gps.run_count-1, pc), *pc=0;
-                    pc = tmpc;
+                    memcpy(pc, "s ", 2), pc += 2;
                 }
-
+                struct nav_sat_s *nav_sat = &m_context.gps.ublox_config->ubx_msg.nav_sat;
+                const struct svs_nav_sat_s * sat = 0;
+                sat_count_t sat_count = {0};
+                for(uint8_t i=0; i < nav_sat->numSvs; i++) {
+                    sat = &nav_sat->sat[i];
+#if defined(CONFIG_LOGGER_COMMON_LOG_LEVEL_TRACE)
+                    printf("sat[%hhu]: %hhu, %hhu, %hhu, %hhu, %hu, %lu %lu %lu\n", i, sat->gnssId, sat->svId, sat->cno, sat->elev, sat->azim, sat->flags, (sat->flags & 0x08), (sat->flags & 0x07));
+#endif
+                    if((sat->flags & 0x08) == 0 || (sat->flags & 0x07) < 4)
+                        continue;
+                    switch(sat->gnssId) {
+                        case 0:
+                            sat_count.gps++;
+                            break;
+                        case 1:
+                            sat_count.sbas++;
+                            break;
+                        case 2:
+                            sat_count.galileo++;
+                            break;
+                        case 3:
+                            sat_count.beidou++;
+                            break;
+                        case 5:
+                            sat_count.qzss++;
+                            break;
+                        case 6:
+                            sat_count.glonass++;
+                            break;
+                        case 7:
+                            sat_count.navic++;
+                            break;
+                        default:
+                            break;
+                    }
+                }
+ 
+                uint8_t gnss = m_context.gps.ublox_config->rtc_conf->gnss;
+                ILOG(TAG, "gnss: %hhu, count: %hhu, G:%d, S:%d, E:%d, B:%d, Q:%d, R:%d, N:%d", gnss, nav_sat->numSvs, sat_count.gps, sat_count.sbas, sat_count.galileo, sat_count.beidou, sat_count.qzss, sat_count.glonass, sat_count.navic);
+                pc += xultoa(m_context.gps.ublox_config->ubx_msg.navPvt.numSV, pc);
+                memcpy(pc, "sat", 3), pc += 3;
+                if((gnss & (1 << 0))!=0) {
+                    *pc++ = ' ';
+                    *pc++ = 'G';
+                    pc += xultoa(sat_count.gps, pc);
+                }
+                if((gnss & (1 << 2))!=0) {
+                    *pc++ = ' ';
+                    *pc++ = 'E';
+                    pc += xultoa(sat_count.galileo, pc);
+                }
+                if((gnss & (1 << 3))!=0) {
+                    *pc++ = ' ';
+                    *pc++ = 'B';
+                    pc += xultoa(sat_count.beidou, pc);
+                }
+                if((gnss & (1 << 6))!=0) {
+                    *pc++ = ' ';
+                    *pc++ = 'R';
+                    pc += xultoa(sat_count.glonass, pc);
+                }
+                *pc = 0;
+                pc=tmpc;
                 showGpsScreen(p, pb, pc, img_src, gps_image_angle);
                 statusbar_update();
 
@@ -806,38 +877,38 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 goto link_for_screen_mode_speed_2;
                 break;
             case SCREEN_MODE_SPEED_STATS_1:
-                DLOG(TAG, "[%] %s, stat 10s: %d", __func__, scr_mode_str, screen_mode);
+                DLOG(TAG, "[%s] %s, stat 10s: %d", __func__, scr_mode_str, screen_mode);
                 sc_data = &sc_screens[0];
                 break;
             case SCREEN_MODE_SPEED_STATS_2:
-                DLOG(TAG, "[%] %s, stat avg: %d", __func__, scr_mode_str, screen_mode);
+                DLOG(TAG, "[%s] %s, stat avg: %d", __func__, scr_mode_str, screen_mode);
                 sc_data = &sc_screens[1];
                 break;
             case SCREEN_MODE_SPEED_STATS_3:
-                DLOG(TAG, "[%] %s, stat stats: %d", __func__, scr_mode_str, screen_mode);
+                DLOG(TAG, "[%s] %s, stat stats: %d", __func__, scr_mode_str, screen_mode);
                 sc_data = &sc_screens[2];
                 break;
             case SCREEN_MODE_SPEED_STATS_4:
-                DLOG(TAG, "[%] %s, stat 500m: %d", __func__, scr_mode_str, screen_mode);
+                DLOG(TAG, "[%s] %s, stat 500m: %d", __func__, scr_mode_str, screen_mode);
                 sc_data = &sc_screens[3];
                 break;
             case SCREEN_MODE_SPEED_STATS_5:
-                DLOG(TAG, "[%] %s, stat 250m: %d", __func__, scr_mode_str, screen_mode);
+                DLOG(TAG, "[%s] %s, stat 250m: %d", __func__, scr_mode_str, screen_mode);
                 sc_data = &sc_screens[4];
                 break;
             case SCREEN_MODE_SPEED_STATS_6:
-                DLOG(TAG, "[%] %s, stat Alpha avg: %d", __func__, scr_mode_str, screen_mode);
+                DLOG(TAG, "[%s] %s, stat Alpha avg: %d", __func__, scr_mode_str, screen_mode);
                 sc_data = &sc_screens[5];
                 break;
             case SCREEN_MODE_SPEED_STATS_7:
             case SCREEN_MODE_SPEED_STATS_8:
             case SCREEN_MODE_SPEED_STATS_9:
-                DLOG(TAG, "[%] %s, stat - %d", __func__, scr_mode_str, screen_mode);
+                DLOG(TAG, "[%s] %s, stat - %d", __func__, scr_mode_str, screen_mode);
                 break;
             case SCREEN_MODE_WIFI_START:
             case SCREEN_MODE_WIFI_AP:
             case SCREEN_MODE_WIFI_STATION:
-                DLOG(TAG, "[%] %s, wifi %d", __func__, scr_mode_str, screen_mode);
+                DLOG(TAG, "[%s] %s, wifi %d", __func__, scr_mode_str, screen_mode);
                 me->self->state.update_delay = 1000;
                 showWifiScreen(wifi_context.s_ap_connection ? wifi_context.ap.ssid : wifi_context.stas[0].ssid, wifi_context.ip_address, wifi_context.s_ap_connection ? "password" : "");
                 statusbar_update();
@@ -1098,11 +1169,11 @@ static void lcd_ui_task(void *args) {
     bool last = false;
     while (lcd_ui_task_running) {
         last:
-        DMEAS_START();
+        IMEAS_START();
         task_delay_ms = screen_cb(0);
-        DMEAS_END(TAG, "[%s] screen_cb took: %llu us",  __FUNCTION__);
+        IMEAS_END(TAG, "[%s] screen_cb took: %llu us",  __FUNCTION__);
         task_delay_ms += lcd_lv_timer_handler();
-        DMEAS_END(TAG, "[%s] next delay %lu ms, lcd_lv_timer_handler took: %llu us", __FUNCTION__, task_delay_ms);
+        IMEAS_END(TAG, "[%s] next delay %lu ms, lcd_lv_timer_handler took: %llu us", __FUNCTION__, task_delay_ms);
         if(lcd_ui_task_running) {
             uint32_t ms = get_millis() + task_delay_ms;
             while (lcd_ui_task_running && get_millis() < ms) {
@@ -1114,7 +1185,7 @@ static void lcd_ui_task(void *args) {
                 goto last; // system going to shut down, do the last screen update
             }
         }
-        DMEAS_END(TAG, "[%s] loop took:%llu us",  __FUNCTION__);
+        IMEAS_END(TAG, "[%s] loop took:%llu us",  __FUNCTION__);
     }
     ILOG(TAG, "[%s] task finishing", __FUNCTION__);
     lcd_ui_task_finished = 1;
