@@ -340,7 +340,7 @@ static void esp_dump_per_task_heap_info(void) {
 } */
 
 
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 1)
 #define GPS_TIMER_STATS 1
 #endif
 
