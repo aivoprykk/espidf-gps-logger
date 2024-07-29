@@ -310,7 +310,9 @@ static int shut_down_gps(int no_sleep) {
         m_context.gps.ublox_config->time_set = 0;
     }
     ubx_off(m_context.gps.ublox_config);
+    #if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
     task_memory_info("before_sleep");
+    #endif
     if (!no_sleep) {
         go_to_sleep(5);  // got to sleep after 5 s, this to prevent booting when
         // GPIO39 is still low !
@@ -524,13 +526,15 @@ static void gpsTask(void *parameter) {
     struct nav_pvt_s * nav_pvt = &ubxMessage->navPvt;
     uint8_t try_setup_times = 5;
     ILOG(TAG, "[%s]", __func__);
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
     task_memory_info("gpsTask");
+#endif
 #if defined(GPS_TIMER_STATS)
     if(gps_periodic_timer)
         ESP_ERROR_CHECK(esp_timer_start_periodic(gps_periodic_timer, 1000000));
 #endif
     while (app_mode == APP_MODE_GPS) {
-#ifdef DEBUG
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
         if (loops++ > 100) {
             task_memory_info("gpsTask");
             loops = 0;
@@ -841,7 +845,7 @@ uint32_t screen_cb(void* arg) {
         }
     }
     end:
-#if defined(DEBUG)
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
     task_memory_info("screencb_task");
 #endif
     xSemaphoreGive(lcd_refreshing_sem);
@@ -1046,7 +1050,9 @@ void app_mode_wifi_handler(int verbose) {
         m_context.wifi_ap_timeout = 10;
         ILOG(TAG, "[%s] wifi sta started.", __FUNCTION__);
     }
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
     task_memory_info("wifiStarter-main");
+#endif
     xTaskCreate(wifiTask,   /* Task function. */
                 "wifiTask", /* String with name of task. */
                 CONFIG_WIFI_TASK_STACK_SIZE,  /* Stack size in bytes. */
@@ -1075,8 +1081,9 @@ void app_mode_gps_handler(int verbose) {
     }
     if(!m_context.sdOK)
         goto end;
-    
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
     task_memory_info("gpsStarter-main");
+#endif
     xTaskCreatePinnedToCore(gpsTask,   /* Task function. */
                 "gpsTask", /* String with name of task. */
                 CONFIG_GPS_LOG_STACK_SIZE,  /* Stack size in bytes. */
@@ -1432,8 +1439,9 @@ static void setup(void) {
 #else
     ESP_LOGW(TAG, "[%s] build debug mode not set.", __FUNCTION__);
 #endif
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
     task_memory_info("screenStarter-main");
-
+#endif
 #if defined(GPS_TIMER_STATS)
     const esp_timer_create_args_t gps_periodic_timer_args = {
         .callback = &gps_periodic_timer_callback,
@@ -1454,7 +1462,7 @@ void app_main(void) {
     uint8_t verbose = 0;
     while (1) {
         if (loops++ > 100) {
-#ifdef DEBUG
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
             task_top();
             memory_info_large("main");
             task_memory_info("main");

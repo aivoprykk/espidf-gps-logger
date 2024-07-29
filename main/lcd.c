@@ -487,7 +487,9 @@ void statusbar_time_cb(lv_timer_t *timer) {
             p += date_to_char(m_context_rtc.RTC_day, m_context_rtc.RTC_month, m_context_rtc.RTC_year, 0, p), *p = 0;
         }
         if(strcmp(lv_label_get_text(panel), &(tmp[0]))) {
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
             printf("** (date)time: %s ** \n", tmp);
+#endif
             lv_label_set_text(panel, &(tmp[0]));
         }
     }
