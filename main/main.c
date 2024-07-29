@@ -455,11 +455,13 @@ esp_err_t ubx_msg_do(ubx_msg_byte_ctx_t *mctx) {
                         if (gps->gps_speed > 1000) // log only when speed is above 1 m/s == 3.6 km/h
                             log_to_file(gps);  // here it is also printed to serial !!
                         ret = push_gps_data(gps, &gps->Ublox, nav_pvt->lat / 10000000.0f, nav_pvt->lon / 10000000.0f, gps->gps_speed);
-                        #if defined(GPS_TIMER_STATS)
                         if(ret){
+                        #if defined(GPS_TIMER_STATS)
                             ++push_failed_count;
+                        #endif
                             goto end;
                         }
+                        #if defined(GPS_TIMER_STATS)
                         else
                             ++push_ok_count;
                         #endif
