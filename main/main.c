@@ -340,9 +340,16 @@ static void esp_dump_per_task_heap_info(void) {
 } */
 
 
-#ifdef GPS_TIMER_STATS
-uint32_t prev_millis = 0, prev_msg_count = 0, prev_err_count = 0;
-esp_timer_handle_t gps_periodic_timer = 0;
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
+#define GPS_TIMER_STATS 1
+#endif
+
+#if defined(GPS_TIMER_STATS)
+static uint32_t push_failed_count = 0, push_ok_count = 0, prev_push_failed_count = 0, prev_push_ok_count = 0;
+static uint32_t local_nav_dop_count = 0, prev_local_nav_dop_count = 0;
+static uint32_t prev_local_nav_pvt_count = 0;
+static uint32_t prev_millis = 0, prev_msg_count = 0, prev_err_count = 0;
+static esp_timer_handle_t gps_periodic_timer = 0;
 
 static void gps_periodic_timer_callback(void* arg) {
     ubx_config_t *ubx = (ubx_config_t *)arg;
@@ -351,11 +358,27 @@ static void gps_periodic_timer_callback(void* arg) {
     uint16_t period_err_count = ubx->ubx_msg.count_err-prev_err_count;
     uint16_t period_msg_count = ubx->ubx_msg.count_msg - prev_msg_count;
     uint16_t period_saved_count = period_msg_count - period_err_count;
+    uint16_t period_push_failed_count = push_failed_count - prev_push_failed_count;
+    uint16_t period_push_ok_count = push_ok_count - prev_push_ok_count;
+    uint16_t period_push_count = period_push_failed_count + period_push_ok_count;
+    uint16_t period_local_nav_dop_count = local_nav_dop_count - prev_local_nav_dop_count;
+    uint16_t period_local_nav_pvt_count = ubx->ubx_msg.count_nav_pvt - prev_local_nav_pvt_count;
     prev_millis = millis;
     prev_msg_count = ubx->ubx_msg.count_msg;
     prev_err_count = ubx->ubx_msg.count_err;
-    printf("[%s] >>>> ts:%"PRId32" period:%"PRIu32", msgcount;%"PRIu16" failcount:%"PRIu16" passcount:%"PRIu16" >>>>\n", __FUNCTION__, millis, period, period_msg_count, period_err_count, period_saved_count);
-    printf("[%s] >>>> ubx total msg count:%"PRIu32", failed: %"PRIu32" ok:%"PRIu32" >>>>\n", __FUNCTION__, ubx->ubx_msg.count_msg, ubx->ubx_msg.count_err, ubx->ubx_msg.count_ok);
+    prev_push_failed_count = push_failed_count;
+    prev_push_ok_count = push_ok_count;
+    prev_local_nav_dop_count = local_nav_dop_count;
+    prev_local_nav_pvt_count = ubx->ubx_msg.count_nav_pvt;
+    printf("\n[%s] * p:%"PRIu32"ms, r:%"PRIu8"Hz\n", __FUNCTION__, period, ubx->rtc_conf->output_rate);
+    printf("[%s] >>>> period  msgcount: %6"PRIu16"  ok: %6"PRIu16" fail: %6"PRIu16" >>>>\n", __FUNCTION__, period_msg_count, period_saved_count, period_err_count);
+    printf("[%s] >>>> total   msgcount: %6"PRIu32", ok: %6"PRIu32" fail: %6"PRIu32" >>>>\n", __FUNCTION__, ubx->ubx_msg.count_msg, ubx->ubx_msg.count_ok, ubx->ubx_msg.count_err);
+    printf("[%s] >>>> period pushcount: %6"PRIu16", ok: %6"PRIu16" fail: %6"PRIu16" >>>>\n", __FUNCTION__, period_push_count, period_push_ok_count, period_push_failed_count);
+    printf("[%s] >>>> total  pushcount: %6"PRIu32", ok: %6"PRIu32" fail: %6"PRIu32" >>>>\n\n", __FUNCTION__, push_ok_count+push_failed_count, push_ok_count, push_failed_count);
+    printf("[%s] >>>> period local_nav_dop_count: %6"PRIu16" >>>>\n", __FUNCTION__, period_local_nav_dop_count);
+    printf("[%s] >>>> total  local_nav_dop_count: %6"PRIu32" >>>>\n\n", __FUNCTION__, local_nav_dop_count);
+    printf("[%s] >>>> period local_nav_pvt_count: %6"PRIu16" >>>>\n", __FUNCTION__, period_local_nav_pvt_count);
+    printf("[%s] >>>> total  local_nav_pvt_count: %6"PRIu32" >>>>\n\n", __FUNCTION__, ubx->ubx_msg.count_nav_pvt);
 }
 #endif
 
@@ -376,9 +399,13 @@ esp_err_t ubx_msg_do(ubx_msg_byte_ctx_t *mctx) {
     struct nav_pvt_s * nav_pvt = &ubxMessage->navPvt;
     gps_context_t *gps = &m_context.gps;
     uint32_t now = get_millis();
+    esp_err_t ret = ESP_OK;
     switch(mctx->ubx_msg_type) {
             case MT_NAV_DOP:
                 if (nav_pvt->iTOW > 0) {  // Logging after NAV_DOP, ublox sends first NAV_PVT, and then NAV_DOP.
+                #if defined(GPS_TIMER_STATS)
+                    local_nav_dop_count++;
+                #endif
                     if ((nav_pvt->numSV >= MIN_numSV_FIRST_FIX) && ((nav_pvt->sAcc / 1000.0f) < MAX_Sacc_FIRST_FIX) && (nav_pvt->valid >= 7) && (ubx->signal_ok == false)) {
                         ubx->signal_ok = true;
                         ubx->first_fix = (now - ubx->ready_time) / 1000;
@@ -391,7 +418,7 @@ esp_err_t ubx_msg_do(ubx_msg_byte_ctx_t *mctx) {
                     ubx_set_time(ubx, m_context.config->timezone);
                     if (!gps->files_opened && ubx->signal_ok && (gps->GPS_delay > (TIME_DELAY_FIRST_FIX * ubx->rtc_conf->output_rate))) {  // vertraging Gps_time_set is nu 10 s!!
                         int32_t avg_speed = 0;
-                        avg_speed = (avg_speed + nav_pvt->gSpeed * 19) / 20;  // FIR filter gem. snelheid laatste 20 metingen in mm/s
+                        avg_speed = (avg_speed + nav_pvt->gSpeed * 19) / 20;  // FIR filter average speed of last 20 measurements in mm/s
                         //printf("[%s] GPS avg gSpeed: %"PRId32", start logging when min is %d\n", __FUNCTION__, avg_speed, MIN_SPEED_START_LOGGING);
                         if (avg_speed > 1000) { // 1 m/s == 3.6 km/h
                             if (ubx->time_set) {
@@ -427,7 +454,15 @@ esp_err_t ubx_msg_do(ubx_msg_byte_ctx_t *mctx) {
                         //saved_count++;
                         if (gps->gps_speed > 1000) // log only when speed is above 1 m/s == 3.6 km/h
                             log_to_file(gps);  // here it is also printed to serial !!
-                        push_gps_data(gps, &gps->Ublox, nav_pvt->lat / 10000000.0f, nav_pvt->lon / 10000000.0f, gps->gps_speed);
+                        ret = push_gps_data(gps, &gps->Ublox, nav_pvt->lat / 10000000.0f, nav_pvt->lon / 10000000.0f, gps->gps_speed);
+                        #if defined(GPS_TIMER_STATS)
+                        if(ret){
+                            ++push_failed_count;
+                            goto end;
+                        }
+                        else
+                            ++push_ok_count;
+                        #endif
                         gps->run_count = new_run_detection(gps, nav_pvt->heading / 100000.0f, gps->S2.avg_s);
                         gps->alfa_window = alfa_indicator(gps, nav_pvt->heading / 100000.0f);
                         // new run detected, reset run distance
@@ -470,7 +505,8 @@ esp_err_t ubx_msg_do(ubx_msg_byte_ctx_t *mctx) {
             default:
                 break;
         }
-        return ESP_OK;
+        end:
+        return ret;
 }
 
 uint8_t ubx_fail_count = 0;
@@ -487,7 +523,7 @@ static void gpsTask(void *parameter) {
     uint8_t try_setup_times = 5;
     ILOG(TAG, "[%s]", __func__);
     task_memory_info("gpsTask");
-#ifdef GPS_TIMER_STATS
+#if defined(GPS_TIMER_STATS)
     if(gps_periodic_timer)
         ESP_ERROR_CHECK(esp_timer_start_periodic(gps_periodic_timer, 1000000));
 #endif
@@ -525,7 +561,7 @@ static void gpsTask(void *parameter) {
     loop_tail:
         delay_ms(10);
     }
-#ifdef GPS_TIMER_STATS
+#if defined(GPS_TIMER_STATS)
     if(gps_periodic_timer)
         ESP_ERROR_CHECK(esp_timer_stop(gps_periodic_timer));
 #endif
@@ -1396,7 +1432,7 @@ static void setup(void) {
 #endif
     task_memory_info("screenStarter-main");
 
-#ifdef GPS_TIMER_STATS
+#if defined(GPS_TIMER_STATS)
     const esp_timer_create_args_t gps_periodic_timer_args = {
         .callback = &gps_periodic_timer_callback,
         .name = "periodic",
@@ -1451,7 +1487,7 @@ void app_main(void) {
 #ifdef CONFIG_USE_LITTLEFS
     littlefs_deinit();
 #endif
-#ifdef GPS_TIMER_STATS
+#if defined(GPS_TIMER_STATS)
     if(gps_periodic_timer)
         ESP_ERROR_CHECK(esp_timer_delete(gps_periodic_timer));
 #endif
