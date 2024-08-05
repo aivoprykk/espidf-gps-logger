@@ -13,6 +13,7 @@ set(REQ gps_log)
 set(PRIVREQ driver esp_wifi
  display logger_common logger_context logger_button logger_vfs logger_str
  logger_config logger_ubx logger_adc logger_wifi logger_http)
+#set(PRIVREQ ${PRIVREQ} app_update esp_http_client esp_https_ota)
 
 if(CONFIG_DISPLAY_USE_LVGL)
 set(srcs ${srcs} lcd.c)
@@ -22,8 +23,13 @@ if(CONFIG_BMX_ENABLE)
 set(srcs ${srcs} bmx.c)
 endif()
 
+set(pdir ${CMAKE_CURRENT_SOURCE_DIR}/../)
+
 if(CONFIG_OTA_USE_AUTO_UPDATE)
-set(ota_crt ${CMAKE_CURRENT_SOURCE_DIR}/../certs/majasa_ca.pem)
+set(srcs ${srcs} https_ota.c)
+if(EXISTS ${pdir}/certs/majasa_ca.pem)
+set(ota_crt ${pdir}/certs/majasa_ca.pem)
+endif()
 endif()
 
 
@@ -46,7 +52,6 @@ set_source_files_properties(${srcs} PROPERTIES COMPILE_FLAGS "-DNDEBUG")
 endif()
 
 MESSAGE("---- testing if flash_data exists in ${CMAKE_CURRENT_SOURCE_DIR}/../flash_data")
-set(pdir ${CMAKE_CURRENT_SOURCE_DIR}/../)
 set(fdir ${pdir}/flash_data)
 if(EXISTS ${fdir})
 file(READ ${pdir}/${CONFIG_PARTITION_TABLE_FILENAME} PARTS)

@@ -25,7 +25,8 @@ struct m_ota_ctx {
 };
 
 void ota_get_task(void *pvParameters);
-void ota_setup();
+void https_ota_start();
+void https_ota_stop();
 
 #ifdef __cplusplus
 }

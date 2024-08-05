@@ -9,12 +9,12 @@
 extern "C" {
 #endif
 
-typedef double (*screen_f_func_double_t)(void);
+typedef float (*screen_f_func_float_t)(void);
 
 typedef size_t (*screen_f_func_time_t)(char *);
 
 enum screen_f_types {
-    type_double = 0,
+    type_float = 0,
     type_char = 1
 };
 
@@ -22,7 +22,7 @@ typedef struct screen_f_s {
     uint8_t id;
     uint8_t type;
     union {
-        screen_f_func_double_t num;
+        screen_f_func_float_t num;
         screen_f_func_time_t timestr;
     } value;
     const char *name;
@@ -50,6 +50,7 @@ uint8_t get_stat_screens_count(void);
 //uint8_t get_time(char *p1, uint8_t hour, uint8_t min);
 
 extern const screen_f_t avail_fields[];
+size_t get_display_fld_str(const screen_f_t *fld, char *p1, size_t (*fn)(double, char *));
 
 #ifdef __cplusplus
 }

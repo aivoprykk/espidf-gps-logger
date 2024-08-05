@@ -27,8 +27,9 @@
 #include "esp_https_ota.h"
 
 #if CONFIG_OTA_USE_AUTO_UPDATE == 0
-void ota_setup() {
-    return;
+void https_ota_start() {
+}
+void https_ota_stop() {
 }
 #else
 
@@ -127,7 +128,7 @@ static esp_err_t _http_client_init_cb(esp_http_client_handle_t http_client) {
 }
 
 void ota_get_task(void *pvParameter) {
-    ESP_LOGI(TAG, "Starting Advanced OTA");
+    ESP_LOGI(TAG, "[%s]", __FUNCTION__);
 
     esp_err_t ota_finish_err = ESP_OK;
     esp_http_client_config_t config = {
@@ -156,6 +157,7 @@ void ota_get_task(void *pvParameter) {
     esp_err_t err = esp_https_ota_begin(&ota_config, &https_ota_handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "ESP HTTPS OTA Begin failed");
+        goto ota_end;
     }
 
     esp_app_desc_t app_desc;
@@ -206,26 +208,28 @@ ota_end:
 }
 
 RTC_DATA_ATTR uint64_t last_check = 0, next_check=0;
+static uint8_t ota_task_started = 0;
 
 void ota_task(void *pvParameter) {
-    int next_check = 0;
-    while (1) {
-        if (!last_check || last_check > next_check) {
+    ESP_LOGI(TAG, "[%s]", __FUNCTION__);
+    next_check = esp_timer_get_time() + 10000000;
+    while (ota_task_started) {
+        if (next_check > esp_timer_get_time()) {
             ota_get_task(pvParameter);
             last_check = esp_timer_get_time();
-            next_check = last_check + CONFIG_OTA_CHECK_INTERVAL;
+            next_check = last_check + (CONFIG_OTA_CHECK_INTERVAL*1000);
         }
-        delay_ms(900000);
+        delay_ms(10000);
     }
+    esp_event_handler_unregister(ESP_HTTPS_OTA_EVENT, ESP_EVENT_ANY_ID, &event_handler);
     vTaskDelete(NULL);
 }
 
-void ota_setup() {
+void https_ota_start() {
     ESP_LOGI(TAG, "[%s]", __FUNCTION__);
     // Initialize NVS.
     esp_err_t err = 0;
-    esp_event_handler_register(ESP_HTTPS_OTA_EVENT, ESP_EVENT_ANY_ID,
-                               &event_handler, NULL);
+    esp_event_handler_register(ESP_HTTPS_OTA_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL);
 
 #if defined(CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE)
     /**
@@ -246,6 +250,13 @@ void ota_setup() {
         }
     }
 #endif
+    ota_task_started = 1;
     xTaskCreate(&ota_task, "ota_task", 1024 * 4, NULL, 5, NULL);
 }
+
+void https_ota_stop() {
+    ESP_LOGI(TAG, "[%s]", __FUNCTION__);
+    ota_task_started = 0;
+}
+
 #endif

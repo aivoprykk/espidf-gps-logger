@@ -1,16 +1,16 @@
 {
-"cal_bat":1.0020,
+"cal_bat":1,
 "speed_unit": 1,
 "sample_rate":10,
-"gnss":3,
+"gnss":111,
 "speed_field":1,
 "speed_large_font":0,
 "bar_length":1852,
-"stat_screens":123456,
+"stat_screens":12345678,
 "stat_screens_time":2,
 "stat_speed":1,
 "archive_days":0,
-"gpio12_screens":12,
+"gpio12_screens":12345678,
 "board_Logo":1,
 "sail_Logo":1,
 "sleep_off_screen":11,
@@ -25,5 +25,7 @@
 "ubx_file":"mygps",
 "sleep_info":"#MyGPS#",
 "ssid":"ssid",
-"password":"password"
+"password":"",
+"ssid1":"ssid1",
+"password1":"password1"
 }

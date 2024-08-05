@@ -55,7 +55,18 @@ typedef enum {
     CUR_SCREEN_OFF_SCREEN,
     CUR_SCREEN_SLEEP_SCREEN,
     CUR_SCREEN_LOW_BAT,
+    CUR_SCREEN_SETTINGS,
 } cur_screens_t;
+
+typedef enum {
+    CFG_GROUP_GPS = 0,
+} config_group_t;
+
+typedef struct v_settings_s {
+    config_group_t group;
+    const char *name;
+    void *settings_data;
+} v_settings_t;
 
 #define INCLUDE_pcTaskGetTaskName 1
 
@@ -130,6 +141,19 @@ struct record_forwarder_s {
     const struct screen_f_s * prev;
     bool num;
 };
+
+#define LCD_UI_TASK_STACK_SIZE 3584
+
+uint32_t lcd_ui_screen_draw();
+void lcd_ui_task(void *args);
+void cancel_lcd_ui_delay();
+uint32_t get_lcd_ui_count();
+void lcd_ui_start_task();
+void pause_lcd_ui_task();
+uint16_t get_offscreen_counter();
+bool lcd_ui_task_is_paused();
+void lcd_ui_request_full_refresh(bool force);
+// void lcd_ui_request_fast_refresh(bool force);
 
 #ifdef __cplusplus
 }

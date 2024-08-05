@@ -41,6 +41,9 @@ typedef enum {
     SCREEN_MODE_SLEEP = 18,
     SCREEN_MODE_RECORD = 19,
     SCREEN_MODE_SD_TROUBLE = 20,
+    SCREEN_MODE_SETTINGS = 21,
+    SCREEN_MODE_LOW_BAT = 22,
+    SCREEN_MODE_OFF_SCREEN = 23,
     SCREEN_MODE_SPEED_1 = 'a',
     SCREEN_MODE_SPEED_2 = 'b',
 } screen_mode_t;
@@ -53,8 +56,6 @@ struct display_s;
 struct lcd_g_s;
 
 typedef struct display_op_s {
-    uint32_t (*boot_screen)(const struct display_s *me);
-    uint32_t (*off_screen)(const struct display_s *me, int choice);
     uint32_t (*sleep_screen)(const struct display_s *me, int choice);
     uint32_t (*update_screen)(const struct display_s *me, const screen_mode_t screen_mode, void *arg);
     void (*uninit)(struct display_s *me);
