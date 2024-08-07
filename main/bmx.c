@@ -2,26 +2,27 @@
 
 #include <driver/gpio.h>
 #include <esp_log.h>
+#include "esp_err.h"
 
 #include "private.h"
 #include "logger_common.h"
+
 #if defined(CONFIG_BMX_ENABLE)
 #include "bmx.h"
 #include <bmx280.h>
 
-static const char *TAG = "bmx";
 static bmx280_t *bmx280 = 0;
 static bool bmx_run = true;
 static TaskHandle_t t1;
 static bmx_t bmx_stat = {0, 0, 0, 0, 0, 0};
 esp_timer_handle_t bmx_periodic_timer;
-TIMER_INIT
+static const char *TAG = "bm.280";
 
 // #define BMX_TASK_STACK_SIZE 1536
 #define BMX_INTERVAL_SEC 10
 
 static esp_err_t bmx_read() {
-    TIMER_S
+    MEAS_START();
     esp_err_t err = ESP_OK;
     const char * last_err = 0;
     bmx_stat.millis = get_millis();
@@ -45,7 +46,7 @@ static esp_err_t bmx_read() {
     } else {
         ESP_LOGI(TAG, "Bmx280 Values: temp = %" PRId32 ", pres = %" PRIu32 ", hum = %" PRIu32 ", elapsed = %" PRIu32, bmx_stat.temp, bmx_stat.press, bmx_stat.humid, bmx_stat.elapsed);
     }
-    TIMER_E
+    MEAS_END(TAG, "[%s] took %llu ms", __func__);
     return err;
 }
 
@@ -103,7 +104,7 @@ esp_err_t init_bmx() {
             .arg = NULL
         };
         ESP_ERROR_CHECK(esp_timer_create(&periodic_timer_args, &bmx_periodic_timer));
-        ESP_ERROR_CHECK(esp_timer_start_periodic(bmx_periodic_timer, 1000000000));
+        ESP_ERROR_CHECK(esp_timer_start_periodic(bmx_periodic_timer, 10000000));
         //xTaskCreatePinnedToCore(bmx_task, "bmx_task", BMX_TASK_STACK_SIZE, NULL, 0, &t1, 1);
     }
 
@@ -119,13 +120,16 @@ bmx_t *bmx_readings() {
     return &bmx_stat;
 }
 
-void bmx_readings_i(int32_t *temp, uint32_t *press, uint32_t *humid) {
+esp_err_t bmx_readings_i(int32_t *temp, uint32_t *press, uint32_t *humid) {
     *temp = bmx_stat.temp;
     *press = bmx_stat.press;
     *humid = bmx_stat.humid;
+    return bmx_stat.status;
 }
 
-void bmx_readings_f(float *temp, float *press, float *humid) {
+esp_err_t bmx_readings_f(float *temp, float *press, float *humid) {
     bmx280_readout2float(&bmx_stat.temp, &bmx_stat.press, &bmx_stat.humid, temp, press, humid);
+    ESP_LOGI(TAG, "[%s] %.2f %.2f %.2f %d", __func__, *temp, *press, *humid, bmx_stat.status);
+    return bmx_stat.status;
 }
 #endif

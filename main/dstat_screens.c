@@ -221,7 +221,7 @@ const char ttime[] = "Time";
 const screen_f_t avail_fields[] = {
     {0, 0, .value.num = S10_display_last, "10sLST", "L", s10},
     {1, 0, .value.num = S10_display_max, "10sMAX", "M", s10},
-    {2, 0, .value.num = S10_display_avg, "10sAVG", "A", s10},
+    {2, 0, .value.num = S10_display_avg, "10sAVG", "10sA", s10},
     {3, 1, .value.timestr = S10_display_max_time, "10sMTM", "T", s10},
 
     {4, 0, .value.num = S2_display_last, "2sLST", "L", s2},
@@ -252,7 +252,7 @@ const screen_f_t avail_fields[] = {
 
     {25, 0, .value.num = A500_display_last, "ALFLST", "L", a500},
     {26, 0, .value.num = A500_display_max, "ALFMAX", "M", a500},
-    {27, 0, .value.num = A500_display_avg, "ALFAVG", "A", a500},
+    {27, 0, .value.num = A500_display_avg, "ALFAVG", "AlfA", a500},
     {28, 1, .value.timestr = A500_display_max_time, "ALFMTM", "T", a500},
 
     {29, 0, .value.num = M100_display_last, "100LST", "L", m100},

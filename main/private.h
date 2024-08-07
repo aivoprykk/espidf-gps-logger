@@ -45,21 +45,24 @@ typedef enum {
 } app_mode_t;
 
 typedef enum {
-    CUR_SCREEN_NONE,
+    CUR_SCREEN_NONE = 0,
     CUR_SCREEN_GPS_STATS,
     CUR_SCREEN_GPS_SPEED,
     CUR_SCREEN_GPS_INFO,
     CUR_SCREEN_GPS_TROUBLE,
     CUR_SCREEN_SAVE_SESSION,
-    CUR_SCREEN_WIFI_INFO,
+    CUR_SCREEN_WIFI,
     CUR_SCREEN_OFF_SCREEN,
     CUR_SCREEN_SLEEP_SCREEN,
     CUR_SCREEN_LOW_BAT,
     CUR_SCREEN_SETTINGS,
+    CUR_SCREEN_BOOT,
 } cur_screens_t;
 
 typedef enum {
     CFG_GROUP_GPS = 0,
+    CFG_GROUP_STAT_SCREENS = 1,
+    CFG_GROUP_SCREEN = 2,
 } config_group_t;
 
 typedef struct v_settings_s {
@@ -142,7 +145,11 @@ struct record_forwarder_s {
     bool num;
 };
 
+#if defined(CONFIG_DISPLAY_DRIVER_ST7789)
+#define LCD_UI_TASK_STACK_SIZE 5120
+#else
 #define LCD_UI_TASK_STACK_SIZE 3584
+#endif
 
 uint32_t lcd_ui_screen_draw();
 void lcd_ui_task(void *args);

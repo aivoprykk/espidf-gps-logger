@@ -75,6 +75,7 @@ static esp_err_t reset_display_state(struct display_state_s *display_state) {
 static uint32_t count = 0, count_last_full_refresh = 0, count_last_fast_refresh = 0;
 static uint8_t dots_counter = 0, offscreen_counter = 0;
 
+#if !defined(CONFIG_DISPLAY_DRIVER_ST7789)
 size_t append_dots(char * p, uint8_t max_dots, uint8_t * cur_dots) {
     if(!p) return 0;
     if((*cur_dots)++ > max_dots) *cur_dots = 1;
@@ -85,6 +86,9 @@ size_t append_dots(char * p, uint8_t max_dots, uint8_t * cur_dots) {
     *j = 0;
     return j - p;
 }
+#else
+#define append_dots(p, max_dots, cur_dots) do{}while(0)
+#endif
 
 typedef struct sleep_scr_s {
     float *data;
@@ -129,8 +133,8 @@ static uint32_t _sleep_screen(const struct display_s *me, int choice) {
         }
     }
     lv_label_set_text(ui_sleep_screen.myid, m_context_rtc.RTC_Sleep_txt);
-    lcd_ui_request_full_refresh(0); // first screen load will cause full refresh
     ++count;
+    lcd_ui_request_full_refresh(0); // first screen load will cause full refresh
     return 100;
 }
 
@@ -153,7 +157,12 @@ static size_t temp_to_char(char *str) {
     // TIMER_S
     float t=0;
     float p=0, h=0;
-    bmx_readings_f(&t, &p, &h);
+    esp_err_t ret = bmx_readings_f(&t, &p, &h);
+    if(ret) {
+        memcpy(str, "-.-", 3);
+        *(str+3) = 0;
+        return 3;
+    }
     if(t==0 && p==0 && h==0)
         goto end;
     if(t==last_temp) {
@@ -164,7 +173,7 @@ static size_t temp_to_char(char *str) {
     }
     size_t len = f1_to_char(t, str);
     char *pt = str + len;
-    *pt = 176;
+    *pt = 176U;
     ++pt;
     ++len;
     *pt = 'C';
@@ -472,7 +481,7 @@ void statusbar_time_cb(lv_timer_t *timer) {
 }
 
 static void statusbar_temp_cb(lv_timer_t *timer) {
-    #if defined(STATUS_PANEL_V1)
+#if defined(STATUS_PANEL_V1)
     ui_status_panel_t * statusbar = &ui_status_panel;
     if(!statusbar->parent) {
         return;
@@ -480,12 +489,20 @@ static void statusbar_temp_cb(lv_timer_t *timer) {
 #else
     lv_statusbar_t * statusbar = (lv_statusbar_t *)ui_StatusPanel;
 #endif
-    char tmp[24], *p = tmp;
+    char tmp[12], *p = tmp;
     lv_obj_t *panel;
     if ((panel = statusbar->temp_label)) {
 #if defined(CONFIG_BMX_ENABLE)
-        temp_to_char(p);
-        if (*p) {
+        size_t len = temp_to_char(p);
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL > 1)
+        if(!len && (len == 3 && *p == '-' && *p+2 == '-')) {
+#else
+        if (!len) {
+#endif
+            if (!lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN))
+                lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
+        }
+        else {
             if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN))
                 lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(panel, p);
@@ -530,10 +547,10 @@ static void statusbar_bat_cb(lv_timer_t *timer) {
         r = lv_label_get_text(panel);
         if(!r || memcmp(r, s, 3))
             lv_label_set_text(panel, r);
-#if defined(CONFIG_DISPLAY_DRIVER_ST7789)
-        lv_obj_set_style_text_color(panel, full>20 ? lv_color_hex(0xFFFFFF) : full>10 ? lv_color_hex(0xEECE44) : lv_color_hex(0xE32424), LV_PART_MAIN | LV_STATE_DEFAULT );
-        lv_obj_set_style_text_opa(panel, 255, LV_PART_MAIN| LV_STATE_DEFAULT);
-#endif
+// #if defined(CONFIG_DISPLAY_DRIVER_ST7789)
+//         lv_obj_set_style_text_color(panel, full>20 ? lv_color_hex(0xFFFFFF) : full>10 ? lv_color_hex(0xEECE44) : lv_color_hex(0xE32424), LV_PART_MAIN | LV_STATE_DEFAULT );
+//         lv_obj_set_style_text_opa(panel, 255, LV_PART_MAIN| LV_STATE_DEFAULT);
+// #endif
     }
 }
 
@@ -725,25 +742,27 @@ static size_t update_gps_info_row_str(char * p) {
     uint8_t gnss = m_context.gps.ublox_config->rtc_conf->gnss;
     pc += xultoa(m_context.gps.ublox_config->ubx_msg.navPvt.numSV, pc);
     memcpy(pc, "sat", 3), pc += 3;
-    if((gnss & (1 << 0))!=0) {
-        *pc++ = ' ';
-        *pc++ = 'G';
-        pc += xultoa(sat_count.gps, pc);
-    }
-    if((gnss & (1 << 2))!=0) {
-        *pc++ = ' ';
-        *pc++ = 'E';
-        pc += xultoa(sat_count.galileo, pc);
-    }
-    if((gnss & (1 << 3))!=0) {
-        *pc++ = ' ';
-        *pc++ = 'B';
-        pc += xultoa(sat_count.beidou, pc);
-    }
-    if((gnss & (1 << 6))!=0) {
-        *pc++ = ' ';
-        *pc++ = 'R';
-        pc += xultoa(sat_count.glonass, pc);
+    if(m_context.gps.ublox_config->ready) {
+        if((gnss & (1 << 0))!=0) {
+            *pc++ = ' ';
+            *pc++ = 'G';
+            pc += xultoa(sat_count.gps, pc);
+        }
+        if((gnss & (1 << 2))!=0) {
+            *pc++ = ' ';
+            *pc++ = 'E';
+            pc += xultoa(sat_count.galileo, pc);
+        }
+        if((gnss & (1 << 3))!=0) {
+            *pc++ = ' ';
+            *pc++ = 'B';
+            pc += xultoa(sat_count.beidou, pc);
+        }
+        if((gnss & (1 << 6))!=0) {
+            *pc++ = ' ';
+            *pc++ = 'R';
+            pc += xultoa(sat_count.glonass, pc);
+        }
     }
     *pc = 0;
     return pc - p;
@@ -765,7 +784,8 @@ static size_t update_gps_desc_row_str(char * p) {
     }
     return pb - p;
 }
-
+static int8_t offset_mark = 0;
+static uint8_t offset_mark_dir = 0;
 static uint32_t next_gps_str_update = 0;
 static uint16_t screen_mode_counter = 0;
 uint16_t get_offscreen_counter() {
@@ -773,7 +793,7 @@ uint16_t get_offscreen_counter() {
 }
 
 static uint32_t _update_screen(const struct display_s *me, const screen_mode_t screen_mode, void *arg) {
-    ILOG(TAG, "[%s] %d", __func__, screen_mode);
+    ILOG(TAG, "[%s] %d %hhd", __func__, screen_mode, offset_mark);
     uint32_t ret = 0;
     UNUSED_PARAMETER(ret);
         logger_config_t *config = m_context.config;
@@ -786,7 +806,6 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
         lv_obj_t *panel, *parent;
         stat_screen_t *sc_data = 0;
         const char *gps = 0;
-        size_t gpslen=0;
         const lv_img_dsc_t *img_src = 0;
         const char * scr_mode_str = "Screen mode ";
         current_screen_mode = screen_mode;
@@ -798,7 +817,8 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
             ++screen_mode_counter;
         }
         else {
-            screen_mode_counter = 1;
+            screen_mode_counter = 0;
+            offset_mark = 0;
         }
         switch (screen_mode) {
             case SCREEN_MODE_GPS_TROUBLE:
@@ -807,16 +827,14 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
             case SCREEN_MODE_GPS_INIT:
             case SCREEN_MODE_GPS_READY:
                 gps = ubx_chip_str(m_context.gps.ublox_config);
-                gpslen = strlen(gps);
-                memcpy(p, gps, gpslen);
-                p += gpslen;
-                uint8_t gps_err = 0;
-                if(gpslen==7 && !strcmp(gps, "UNKNOWN")) {
+                if(!strcmp(gps, "UNKNOWN")) {
+                    p=str;
                     img_src = &near_me_disabled_bold_48px;
-                    memcpy(&str[0], "GPS FAIL", 8), p += 8;
-                    gps_err = 1;
+                    memcpy(&str[0], "GPS -", 5), p += 5;
                 }
                 else {
+                    p += strlen(gps);
+                    memcpy(&str[0], gps, p-&str[0]);
                     img_src = &near_me_bold_48px;
                     *p++ = '@';
                     p += xltoa(m_context.gps.ublox_config->rtc_conf->output_rate, p);
@@ -828,29 +846,30 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 if(now > next_gps_str_update) {
                     next_gps_str_update = now + 2000;
                     update_gps_info_row_str(&bat_status_str[0]);
-                    if(!gps_err) update_gps_desc_row_str(&gps_status_str[0]);
+                    update_gps_desc_row_str(&gps_status_str[0]);
                 }
+                ui_set_main_cnt_offset(&ui_info_screen.screen, offset_mark);
                 showGpsScreen(&str[0], &bat_status_str[0], &gps_status_str[0], img_src, gps_image_angle);
                 statusbar_update();
 
-#if defined(CONFIG_DISPLAY_DRIVER_ST7789)
-                if(screen_mode==SCREEN_MODE_GPS_INIT) {
-                    lv_obj_set_style_img_recolor(ui_info_screen.info_img, lv_color_hex(0x162B2E), LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_img_recolor_opa(ui_info_screen.info_img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-                }
-                else if(screen_mode==SCREEN_MODE_GPS_READY) {
-                    //104951
-                    lv_obj_set_style_img_recolor(ui_info_screen.info_img, lv_color_hex(0x104951), LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_img_recolor_opa(ui_info_screen.info_img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);               
-                }
-                else if(screen_mode==SCREEN_MODE_GPS_TROUBLE) {
-                    lv_obj_set_style_img_recolor(ui_info_screen.info_img, lv_color_hex(0xE32424), LV_PART_MAIN | LV_STATE_DEFAULT);
-                    lv_obj_set_style_img_recolor_opa(ui_info_screen.info_img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-                }
-                gps_image_angle += 225;
-                if (gps_image_angle >= 3600)
-                    gps_image_angle = 0;
-#endif
+// #if defined(CONFIG_DISPLAY_DRIVER_ST7789)
+//                 if(screen_mode==SCREEN_MODE_GPS_INIT) {
+//                     lv_obj_set_style_img_recolor(ui_info_screen.info_img, lv_color_hex(0x162B2E), LV_PART_MAIN | LV_STATE_DEFAULT);
+//                     lv_obj_set_style_img_recolor_opa(ui_info_screen.info_img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+//                 }
+//                 else if(screen_mode==SCREEN_MODE_GPS_READY) {
+//                     //104951
+//                     lv_obj_set_style_img_recolor(ui_info_screen.info_img, lv_color_hex(0x104951), LV_PART_MAIN | LV_STATE_DEFAULT);
+//                     lv_obj_set_style_img_recolor_opa(ui_info_screen.info_img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);               
+//                 }
+//                 else if(screen_mode==SCREEN_MODE_GPS_TROUBLE) {
+//                     lv_obj_set_style_img_recolor(ui_info_screen.info_img, lv_color_hex(0xE32424), LV_PART_MAIN | LV_STATE_DEFAULT);
+//                     lv_obj_set_style_img_recolor_opa(ui_info_screen.info_img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+//                 }
+//                 gps_image_angle += 225;
+//                 if (gps_image_angle >= 3600)
+//                     gps_image_angle = 0;
+// #endif
                 break;
             case SCREEN_MODE_PUSH:
                 append_dots(p, 10, &dots_counter);
@@ -900,7 +919,6 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 break;
             case SCREEN_MODE_SPEED_1:
             link_for_screen_mode_speed_2:
-                showSpeedScreen();
                 gpsspd = gps_last_speed_smoothed(2) * m_context_rtc.RTC_calibration_speed;
                 if (!m_context.gps.ublox_config->ready || !m_context.gps.ublox_config->signal_ok) {
                     memcpy(p, "-.--", 4);
@@ -916,6 +934,9 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                     else
                         f1_to_char(gpsspd, p);
                 }
+                if(me->self->state.update_delay>100)
+                    ui_set_main_cnt_offset(&ui_speed_screen.screen, offset_mark);
+                showSpeedScreen();
                 panel = ui_speed_screen.speed;
                 lv_label_set_text(panel, p);
                 speed_info_bar_update();
@@ -967,6 +988,7 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 DLOG(TAG, "[%s] %s, wifi %d", __func__, scr_mode_str, screen_mode);
                 me->self->state.update_delay = 600;
                 const char *ssid = wifi_context.s_ap_connection ? wifi_context.ap.ssid : wifi_context.s_sta_num_connect < M_WIFI_STA_MAX ? wifi_context.stas[wifi_context.s_sta_num_connect].ssid : "";
+                ui_set_main_cnt_offset(&ui_info_screen.screen, offset_mark);
                 showWifiScreen(ssid, wifi_context.ip_address, wifi_context.s_ap_connection ? "password" : "");
                 statusbar_update();
 #if defined(CONFIG_DISPLAY_DRIVER_ST7789)
@@ -993,6 +1015,7 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                     const v_settings_t *s = arg;
                     const logger_config_item_t *i = (const logger_config_item_t *)s->settings_data;
                     if(!i) goto plain_setting;
+                    ui_set_main_cnt_offset(&ui_info_screen.screen, offset_mark);
                     showSettingsScreen(s->name, i->name, i->desc);
                 }
                 else {
@@ -1005,146 +1028,64 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
         }
         if (is_gps_stat_screen) {
             const char * f_name = 0;
+            uint8_t r, c, n, rows, cols;
             if (sc_data->num_fields == 6) {
-                showStatsScreen32();
+#if defined(CONFIG_DISPLAY_DRIVER_SSD1681)
+                DLOG(TAG, "[%s] stats panel: 6Row x 1Slot", __func__);
+                rows = 6, cols = 1;
+#else
                 DLOG(TAG, "[%s] stats panel: 3Row x 2Slot", __func__);
-                //lv_obj_add_flag(ui_StatsPanel4Row, LV_OBJ_FLAG_HIDDEN);
-                // 1. left slot
-                panel = ui_stats_screen.cells[0][0].title;
-                get_display_fld_str(sc_data->fields[0].field, p, f2_to_char);
-                lv_label_set_text(panel, p);
-                panel = ui_stats_screen.cells[0][0].info;
-                if(strcmp(lv_label_get_text(panel), sc_data->fields[0].field->name))
-                    lv_label_set_text(panel, sc_data->fields[0].field->name);
-                // 1. right slot
-                panel = ui_stats_screen.cells[0][1].title;
-                get_display_fld_str(sc_data->fields[3].field, p, f2_to_char);
-                lv_label_set_text(panel, p);
-                panel = ui_stats_screen.cells[0][1].info;
-                f_name = sc_data->use_abbr ? sc_data->fields[3].field->abbr : sc_data->fields[3].field->name;
-                if(strcmp(lv_label_get_text(panel), f_name))
-                    lv_label_set_text(panel, f_name);
-                // 2. left slot
-                panel = ui_stats_screen.cells[1][0].title;
-                get_display_fld_str(sc_data->fields[1].field, p, f2_to_char);
-                lv_label_set_text(panel, p);
-                panel = ui_stats_screen.cells[1][0].info;
-                f_name = sc_data->use_abbr ? sc_data->fields[1].field->abbr : sc_data->fields[1].field->name;
-                if(strcmp(lv_label_get_text(panel), f_name))
-                    lv_label_set_text(panel, f_name);
-                // 2. right slot
-                panel = ui_stats_screen.cells[1][1].title;
-                get_display_fld_str(sc_data->fields[4].field, p, f2_to_char);
-                lv_label_set_text(panel, p);
-                panel = ui_stats_screen.cells[1][1].info;
-                f_name = sc_data->use_abbr ? sc_data->fields[4].field->abbr : sc_data->fields[4].field->name;
-                if(strcmp(lv_label_get_text(panel), f_name))
-                    lv_label_set_text(panel, f_name);
-                // 3. left slot
-                // parent=ui_Stats3Row3LeftPanel;
-                panel = ui_stats_screen.cells[2][0].title;
-                get_display_fld_str(sc_data->fields[2].field, p, f2_to_char);
-                lv_label_set_text(panel, p);
-                panel = ui_stats_screen.cells[2][0].info;
-                f_name = sc_data->use_abbr ? sc_data->fields[2].field->abbr : sc_data->fields[2].field->name;
-                if(strcmp(lv_label_get_text(panel), f_name))
-                    lv_label_set_text(panel, f_name);
-                // 3. right slot
-                // parent=ui_Stats3Row3RightPanel;
-                panel = ui_stats_screen.cells[2][1].title;
-                lv_label_set_text(panel, p);
-                get_display_fld_str(sc_data->fields[5].field, p, f2_to_char);
-                panel = ui_stats_screen.cells[2][1].info;
-                f_name = sc_data->use_abbr ? sc_data->fields[5].field->abbr : sc_data->fields[5].field->name;
-                if(strcmp(lv_label_get_text(panel), f_name))
-                    lv_label_set_text(panel, f_name);
+                rows = 3, cols = 2;
+#endif
             } 
             else if (sc_data->num_fields == 4) {
-                showStatsScreen22();
+#if defined(CONFIG_DISPLAY_DRIVER_SSD1681)
+                DLOG(TAG, "[%s] stats panel: 4Row x 1Slot", __func__);
+                rows = 4, cols = 1;
+#else
                 DLOG(TAG, "[%s] stats panel: 2Row x 2Slot", __func__);
-                //lv_obj_add_flag(ui_StatsPanel4Row, LV_OBJ_FLAG_HIDDEN);
-                // 1. left slot
-                // parent= ui_Stats3Row1LeftPanel;
-                panel = ui_stats_screen.cells[0][0].title;
-                get_display_fld_str(sc_data->fields[0].field, p, f2_to_char);
-                lv_label_set_text(panel, p);
-                panel = ui_stats_screen.cells[0][0].info;
-                if(strcmp(lv_label_get_text(panel), sc_data->fields[0].field->name))
-                    lv_label_set_text(panel, sc_data->fields[0].field->name);
-                // 1. right slot
-                panel = ui_stats_screen.cells[0][1].title;
-                get_display_fld_str(sc_data->fields[1].field, p, f2_to_char);
-                lv_label_set_text(panel, p);
-                panel = ui_stats_screen.cells[0][1].info;
-                f_name = sc_data->use_abbr ? sc_data->fields[1].field->abbr : sc_data->fields[1].field->name;
-                if(strcmp(lv_label_get_text(panel), f_name))
-                    lv_label_set_text(panel, f_name);
-                // 2. left slot
-                panel = ui_stats_screen.cells[1][0].title;
-                get_display_fld_str(sc_data->fields[2].field, p, f2_to_char);
-                lv_label_set_text(panel, p);
-                panel = ui_stats_screen.cells[1][0].info;
-                f_name = sc_data->use_abbr ? sc_data->fields[2].field->abbr : sc_data->fields[2].field->name;
-                if(strcmp(lv_label_get_text(panel), f_name))
-                    lv_label_set_text(panel, f_name);
-                // 2. right slot
-                panel = ui_stats_screen.cells[1][1].title;
-                get_display_fld_str(sc_data->fields[3].field, p, f2_to_char);
-                lv_label_set_text(panel, p);
-                panel = ui_stats_screen.cells[1][1].info;
-                f_name = sc_data->use_abbr ? sc_data->fields[3].field->abbr : sc_data->fields[3].field->name;
-                if(strcmp(lv_label_get_text(panel), f_name))
-                    lv_label_set_text(panel, f_name);
+                rows = 2, cols = 2;
+#endif
             } else if (sc_data->num_fields == 2) {
                 DLOG(TAG, "[%s] stats panel: 2Row x 1Slot", __func__);
-                loadStatsScreen(2,1);
-                // field 1
-                panel = ui_stats_screen.cells[0][0].title;
-                get_display_fld_str(sc_data->fields[0].field, p, f2_to_char);
-                lv_label_set_text(panel, p);
-                panel = ui_stats_screen.cells[0][0].info;
-                if(strcmp(lv_label_get_text(panel), sc_data->fields[0].field->abbr))
-                    lv_label_set_text(panel, sc_data->fields[0].field->name);
-                // field 2
-                panel = ui_stats_screen.cells[1][0].title;
-                get_display_fld_str(sc_data->fields[1].field, p, f2_to_char);
-                lv_label_set_text(panel, p);
-                panel = ui_stats_screen.cells[1][0].info;
-                f_name = sc_data->use_abbr ? sc_data->fields[1].field->abbr : sc_data->fields[1].field->name;
-                if(strcmp(lv_label_get_text(panel), f_name))
-                    lv_label_set_text(panel, f_name);
+                rows = 2, cols = 1;
             } else {
                 DLOG(TAG, "[%s] stats panel: 3Row x 1Slot", __func__);
-                loadStatsScreen(3,1);
-                // 1. full last run
-                panel = ui_stats_screen.cells[0][0].title;
-                get_display_fld_str(sc_data->fields[0].field, p, f2_to_char);
-                lv_label_set_text(panel, p);
-                panel = ui_stats_screen.cells[0][0].info;
-                if(strcmp(lv_label_get_text(panel), sc_data->fields[0].field->abbr))
-                    lv_label_set_text(panel, sc_data->fields[0].field->name);
-                // 2. max run
-                panel = ui_stats_screen.cells[1][0].title;
-                get_display_fld_str(sc_data->fields[1].field, p, f2_to_char);
-                lv_label_set_text(panel, p);
-                panel = ui_stats_screen.cells[1][0].info;
-                f_name = sc_data->use_abbr ? sc_data->fields[1].field->abbr : sc_data->fields[1].field->name;
-                if(strcmp(lv_label_get_text(panel), f_name))
-                    lv_label_set_text(panel, f_name);
-                // 3. avg run
-                panel = ui_stats_screen.cells[2][0].title;
-                get_display_fld_str(sc_data->fields[2].field, p, f2_to_char);
-                lv_label_set_text(panel, p);
-                panel = ui_stats_screen.cells[2][0].info;
-                f_name = sc_data->use_abbr ? sc_data->fields[2].field->abbr : sc_data->fields[2].field->name;
-                if(strcmp(lv_label_get_text(panel), f_name))
-                    lv_label_set_text(panel, f_name);
+                rows = 3, cols = 1;
+            }
+            ui_set_main_cnt_offset(&ui_stats_screen.screen, offset_mark);
+            loadStatsScreen(rows,cols);
+            for(c=0; c < cols; c++) {
+                for(r = 0; r < rows; r++) {
+                    n = c*rows+r;
+                    panel = ui_stats_screen.cells[r][c].title;
+                    get_display_fld_str(sc_data->fields[n].field, p, f2_to_char);
+                    lv_label_set_text(panel, p);
+                    panel = ui_stats_screen.cells[r][c].info;
+                    f_name = sc_data->use_abbr ? sc_data->fields[n].field->abbr : sc_data->fields[n].field->name;
+                    if(strcmp(lv_label_get_text(panel), f_name))
+                        lv_label_set_text(panel, f_name);
+                }
             }
             statusbar_update();
         }
-        if(count%200==0){
+#if !defined(CONFIG_DISPLAY_DRIVER_ST7789)
+        ILOG(TAG, "[%s] offset: %hhd, dir: %hhu, screen_mode_counter: %hu", __func__, offset_mark, offset_mark_dir, screen_mode_counter);
+        if(screen_mode_counter && screen_mode_counter%10 == 0) {
+            if(offset_mark > 4) {
+                offset_mark_dir = 1;
+            }
+            else if(offset_mark == 0) {
+                offset_mark_dir = 0;
+            }
+            if(!offset_mark_dir) ++offset_mark;
+            else --offset_mark;
+            ILOG(TAG, "[%s] offset: %hhd, dir: %hhu, screen_mode_counter: %hu", __func__, offset_mark, offset_mark_dir, screen_mode_counter);
+        }
+        if(count%100==0){
             lcd_ui_request_full_refresh(0);
         }
+#endif
         ++count;
         ret += me->self->state.update_delay;
         old_screen_mode = current_screen_mode;
@@ -1203,8 +1144,11 @@ uint32_t lcd_ui_screen_draw() {
     IMEAS_END(TAG, "[%s] next delay %lu ms, timer_handler took: %llu us",  __FUNCTION__, timer_delay_ms);
 #if !defined(CONFIG_DISPLAY_DRIVER_ST7789)
     _lv_disp_refr_timer(NULL);
+#else
+    if(timer_delay_ms > task_delay_ms)
 #endif
-    if(timer_delay_ms > task_delay_ms) task_delay_ms = timer_delay_ms;
+        task_delay_ms = timer_delay_ms;
+
     IMEAS_END(TAG, "[%s] next delay %lu ms, refr_timer took: %llu us", __FUNCTION__, task_delay_ms);
     return task_delay_ms;
 };
@@ -1221,15 +1165,16 @@ void lcd_ui_task(void *args) {
         if(!lcd_ui_task_paused)
             task_delay_ms = lcd_ui_screen_draw();
         if(lcd_ui_task_running) {
+#if defined(CONFIG_DISPLAY_DRIVER_ST7789)
+            delay_ms(task_delay_ms);
+            UNUSED_PARAMETER(task_delay_ms);
+#else
             ms = get_millis() + task_delay_ms;
             ILOG(TAG, "[%s] will delay for %lu ms", __FUNCTION__, task_delay_ms);
             while (lcd_ui_task_running && get_millis() < ms) {
-#if defined(CONFIG_DISPLAY_DRIVER_ST7789)
-                delay_ms(L_LVGL_TASK_MIN_DELAY_MS);
-#else
                 delay_ms(L_LVGL_TASK_MAX_DELAY_MS);
-#endif
             }
+#endif
         }
     }
     ILOG(TAG, "[%s] task finishing", __FUNCTION__);
@@ -1301,8 +1246,8 @@ static void lcd_ui_stop() {
     }
     lcd_ui_screen_draw();
     if(current_screen_mode == SCREEN_MODE_SLEEP) {
-        lcd_ui_screen_draw();
-        //delay_ms(5000);
+        //lcd_ui_screen_draw();
+        delay_ms(4000);
     }
     ui_deinit();
     IMEAS_END(TAG, "[%s] %hu 20 ms loops, total %llu us ",  __FUNCTION__, i);

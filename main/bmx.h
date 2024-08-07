@@ -17,13 +17,13 @@ typedef struct {
     uint32_t press, humid;
     uint32_t millis;
     uint32_t elapsed;
-    int8_t status;
+    int status;
 } bmx_t;
 int init_bmx();
 void deinit_bmx();
 bmx_t * bmx_readings();
-void bmx_readings_i(int32_t * temp, uint32_t * press, uint32_t * humid);
-void bmx_readings_f(float * temp, float * press, float * humid);
+int bmx_readings_i(int32_t * temp, uint32_t * press, uint32_t * humid);
+int bmx_readings_f(float * temp, float * press, float * humid);
 
 #endif
 

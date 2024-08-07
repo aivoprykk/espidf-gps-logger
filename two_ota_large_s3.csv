@@ -9,4 +9,4 @@ factory,  app,  factory, ,         2000K
 ota_0,    app,  ota_0,   ,         2000K
 ota_1,    app,  ota_1,   ,         2000K
 coredump, data, coredump,,         64K
-littlefstore,data,spiffs,,         4000K
+store,data,spiffs,,         4000K

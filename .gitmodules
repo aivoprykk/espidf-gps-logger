@@ -47,3 +47,6 @@
 [submodule "components/ccan_json"]
 	path = components/ccan_json
 	url = ssh://git@github.com/aivoprykk/ccan_json.git
+[submodule "components/bmx280"]
+	path = components/bmx280
+	url = ssh://git@10.10.19.80/git/bmx280.git
