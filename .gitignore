@@ -4,4 +4,5 @@
 build
 managed_components
 local_components
-:.old
+dependencies.lock
+.old
