@@ -67,6 +67,11 @@ export default {
   },
   computed: {
     ...mapGetters(["isLoggedIn"])
+  },
+  mounted() {
+    if(window.location.origin.includes('esp-logger')) {
+      axios.defaults.baseURL = window.location.origin + '/api/v1';
+    }
   }
 }
 </script>

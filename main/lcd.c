@@ -43,6 +43,15 @@ extern struct context_rtc_s m_context_rtc;
 //extern struct UBXMessage ubxMessage;
 extern struct m_wifi_context wifi_context;
 static void lcd_ui_start();
+static uint8_t lcd_ui_task_resumed_for_times = 0;
+static int8_t lcd_ui_task_full_refresh_on_time = 0;
+static int8_t lcd_ui_task_fast_refresh_on_time = 0;
+static bool lcd_ui_task_full_refresh_on_time_force = false;
+static bool lcd_ui_task_running = true;
+static bool lcd_ui_task_not_paused  = true;
+static bool lcd_ui_task_finished = 0;
+static SemaphoreHandle_t lcd_refreshing_sem = NULL;
+
 
 esp_lcd_panel_handle_t dspl = 0;
 screen_mode_t current_screen_mode = SCREEN_MODE_UNKNOWN, old_screen_mode = SCREEN_MODE_UNKNOWN;
@@ -73,6 +82,7 @@ static esp_err_t reset_display_state(struct display_state_s *display_state) {
 }
 
 static uint32_t count = 0, count_last_full_refresh = 0, count_last_fast_refresh = 0;
+static int32_t count_flushed = -1;
 static uint8_t dots_counter = 0, offscreen_counter = 0;
 
 #if !defined(CONFIG_DISPLAY_DRIVER_ST7789)
@@ -133,8 +143,8 @@ static uint32_t _sleep_screen(const struct display_s *me, int choice) {
         }
     }
     lv_label_set_text(ui_sleep_screen.myid, m_context_rtc.RTC_Sleep_txt);
-    ++count;
     lcd_ui_request_full_refresh(0); // first screen load will cause full refresh
+    ++count;
     return 100;
 }
 
@@ -789,15 +799,16 @@ static uint8_t offset_mark_dir = 0;
 static uint32_t next_gps_str_update = 0;
 static uint16_t screen_mode_counter = 0;
 uint16_t get_offscreen_counter() {
-    return current_screen_mode == SCREEN_MODE_SHUT_DOWN ? screen_mode_counter : 0;
+    return old_screen_mode == SCREEN_MODE_SHUT_DOWN && count_flushed==count ? screen_mode_counter : 0;
 }
 
 static uint32_t _update_screen(const struct display_s *me, const screen_mode_t screen_mode, void *arg) {
-    ILOG(TAG, "[%s] %d %hhd", __func__, screen_mode, offset_mark);
+    ILOG(TAG, "[%s] %ld mode: %d offset: %hhd", __func__, count, screen_mode, offset_mark);
     uint32_t ret = 0;
     UNUSED_PARAMETER(ret);
+    if(xSemaphoreTake(lcd_refreshing_sem, portMAX_DELAY) == pdTRUE) {
         logger_config_t *config = m_context.config;
-        char str[24] = {0}, *p = str, str1[32]={0}, *pb = str1, str2[32]={0}, *pc = str1;
+        char str[24] = {0}, *p = str, str1[32]={0}, *pb = str1, str2[32]={0}, *pc = str2;
         bool is_gps_stat_screen = (screen_mode > 0 && screen_mode < 10);
         me->self->state.update_delay = 500;
         // ESP_LOGI(TAG, "update screen: mode:%" PRIu8 ", update nr:%lu", screen_mode, count);
@@ -808,8 +819,8 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
         const char *gps = 0;
         const lv_img_dsc_t *img_src = 0;
         const char * scr_mode_str = "Screen mode ";
+        count_flushed = -1;
         current_screen_mode = screen_mode;
-        
         if(dots_counter && old_screen_mode != screen_mode) {
             dots_counter = 0;
         }
@@ -872,8 +883,8 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
 // #endif
                 break;
             case SCREEN_MODE_PUSH:
-                append_dots(p, 10, &dots_counter);
-                showPushScreen(state, &str[0]);
+                struct push_forwarder_s * pf = (struct push_forwarder_s*)arg;
+                showPushScreen(pf->state, pf->title);
                 break;
             case SCREEN_MODE_SD_TROUBLE:
                 showSdTroubleScreen();
@@ -888,7 +899,7 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 float distance = avail_fields[41].value.num();
                 const char *title = m_context.request_restart ? "Reboot device" : m_context.Shut_down_Save_session ? 0 : "Going to sleep";
                 memcpy(&str[0], title ? title : "Save session", title ? strlen(title) : 12), p += title ? strlen(title) : 12;
-                append_dots(p, 3, &dots_counter);
+                // append_dots(p, 3, &dots_counter);
                 if(m_context.low_bat_count > 5) {
                     //current_screen_mode = SCREEN_MODE_LOW_BAT;
                     goto link_for_low_bat;
@@ -913,7 +924,7 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 lcd_ui_request_full_refresh(0); // first screen load will cause full refresh
                 // current_screen_mode = SCREEN_MODE_BOOT;
                 memcpy(p, "Booting", 7), p += 7;
-                append_dots(p, 3, &dots_counter);
+                // append_dots(p, 3, &dots_counter);
                 showBootScreen(&str[0]);
                 if (count<2) me->self->state.update_delay = 100;
                 break;
@@ -987,9 +998,26 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
             case SCREEN_MODE_WIFI_STATION:
                 DLOG(TAG, "[%s] %s, wifi %d", __func__, scr_mode_str, screen_mode);
                 me->self->state.update_delay = 600;
-                const char *ssid = wifi_context.s_ap_connection ? wifi_context.ap.ssid : wifi_context.s_sta_num_connect < M_WIFI_STA_MAX ? wifi_context.stas[wifi_context.s_sta_num_connect].ssid : "";
+                if(wifi_context.s_ap_connection) {
+                    memcpy(p, wifi_context.ap.ssid, strlen(wifi_context.ap.ssid)), p += strlen(wifi_context.ap.ssid);
+                    // pb += sprintf(pb, "%hhu.%hhu.%hhu.%hhu", wifi_context.ap.ipv4_address[0], wifi_context.ap.ipv4_address[1], wifi_context.ap.ipv4_address[2], wifi_context.ap.ipv4_address[3]);
+                }
+                if (wifi_context.s_sta_connection && wifi_context.s_sta_connected) {
+                    if(wifi_context.s_ap_connection) memcpy(p, " / ", 3), p += 3;
+                    memcpy(p, wifi_context.stas[wifi_context.s_sta_num_connect].ssid, strlen(wifi_context.stas[wifi_context.s_sta_num_connect].ssid)), p += strlen(wifi_context.stas[wifi_context.s_sta_num_connect].ssid);
+                    // if(wifi_context.s_ap_connection) memcpy(pb, " / ", 3), pb += 3;
+                    // sprintf(pb, "%hhu.%hhu.%hhu.%hhu", wifi_context.stas[wifi_context.s_sta_num_connect].ipv4_address[0], wifi_context.stas[wifi_context.s_sta_num_connect].ipv4_address[1], wifi_context.stas[wifi_context.s_sta_num_connect].ipv4_address[2], wifi_context.stas[wifi_context.s_sta_num_connect].ipv4_address[3]), pb+=strlen(pb);
+                }
+                if(wifi_context.s_ap_connection || wifi_context.s_sta_connection) {
+                    memcpy(pb, wifi_context.hostname, strlen(wifi_context.hostname)), pb += strlen(wifi_context.hostname);
+                    memcpy(pb, ".local", 11), pb+=11;
+                }
+                if(wifi_context.s_ap_connection) memcpy(pc, "password", 11), pc+=11;
+                *pc = 0;
+                
                 ui_set_main_cnt_offset(&ui_info_screen.screen, offset_mark);
-                showWifiScreen(ssid, wifi_context.ip_address, wifi_context.s_ap_connection ? "password" : "");
+                
+                showWifiScreen(&str[0], &str1[0], &str2[0]);
                 statusbar_update();
 #if defined(CONFIG_DISPLAY_DRIVER_ST7789)
                 lv_obj_set_style_img_recolor(ui_info_screen.info_img, lv_color_hex(0x104951), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1070,7 +1098,7 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
             statusbar_update();
         }
 #if !defined(CONFIG_DISPLAY_DRIVER_ST7789)
-        ILOG(TAG, "[%s] offset: %hhd, dir: %hhu, screen_mode_counter: %hu", __func__, offset_mark, offset_mark_dir, screen_mode_counter);
+        ILOG(TAG, "[%s] done, %ld mode: %d offset: %hhd, dir: %hhu, screen_mode_counter: %hu", __func__, count, screen_mode, offset_mark, offset_mark_dir, screen_mode_counter);
         if(screen_mode_counter && screen_mode_counter%10 == 0) {
             if(offset_mark > 4) {
                 offset_mark_dir = 1;
@@ -1080,15 +1108,25 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
             }
             if(!offset_mark_dir) ++offset_mark;
             else --offset_mark;
-            ILOG(TAG, "[%s] offset: %hhd, dir: %hhu, screen_mode_counter: %hu", __func__, offset_mark, offset_mark_dir, screen_mode_counter);
         }
-        if(count%100==0){
+        if(lcd_ui_task_resumed_for_times) --lcd_ui_task_resumed_for_times;
+        if(lcd_ui_task_fast_refresh_on_time==count) {
+            lcd_ui_request_fast_refresh();
+            lcd_ui_task_cancel_req_fast_refresh();
+        }
+        else if(lcd_ui_task_full_refresh_on_time==count) {
+            lcd_ui_request_full_refresh(lcd_ui_task_full_refresh_on_time_force);
+            lcd_ui_task_cancel_req_full_refresh();
+        }
+        else if(count%100==0){
             lcd_ui_request_full_refresh(0);
         }
 #endif
         ++count;
         ret += me->self->state.update_delay;
         old_screen_mode = current_screen_mode;
+        xSemaphoreGive(lcd_refreshing_sem);
+    }
     return ret;
 }
 
@@ -1134,35 +1172,36 @@ uint32_t lcd_lv_timer_handler() {
 }
 
 uint32_t lcd_ui_screen_draw() {
-    ILOG(TAG, "[%s]", __func__);
+    ILOG(TAG, "[%s] %ld offset: %d", __func__, count, offset_mark);
     IMEAS_START();
     _lvgl_lock(0);
     _lvgl_unlock();
     uint32_t task_delay_ms = screen_cb(0);
-    IMEAS_END(TAG, "[%s] next delay %lu ms, screen_cb took: %llu us",  __FUNCTION__, task_delay_ms);
+    IMEAS_END(TAG, "[%s] . %ld next delay %lu ms, screen_cb took: %llu us",  __FUNCTION__, count, task_delay_ms);
     uint32_t timer_delay_ms = lcd_lv_timer_handler();
-    IMEAS_END(TAG, "[%s] next delay %lu ms, timer_handler took: %llu us",  __FUNCTION__, timer_delay_ms);
+    IMEAS_END(TAG, "[%s] .. %ld next delay %lu ms, timer_handler took: %llu us",  __FUNCTION__, count, timer_delay_ms);
 #if !defined(CONFIG_DISPLAY_DRIVER_ST7789)
     _lv_disp_refr_timer(NULL);
+    count_flushed = count;
 #else
     if(timer_delay_ms > task_delay_ms)
 #endif
         task_delay_ms = timer_delay_ms;
 
-    IMEAS_END(TAG, "[%s] next delay %lu ms, refr_timer took: %llu us", __FUNCTION__, task_delay_ms);
+    IMEAS_END(TAG, "[%s] ... done. %ld next delay %lu ms, refr_timer took: %llu us", __FUNCTION__, count, task_delay_ms);
     return task_delay_ms;
 };
 
-static bool lcd_ui_task_running = true;
-static bool lcd_ui_task_paused  = false;
-static bool lcd_ui_task_finished = 0;
 uint32_t ms = 0;
 
 void lcd_ui_task(void *args) {
     ILOG(TAG, "[%s] task starting", __FUNCTION__);
     uint32_t task_delay_ms = lcd_lv_timer_handler();
     while (lcd_ui_task_running) {
-        if(!lcd_ui_task_paused)
+        if(xSemaphoreTake(lcd_refreshing_sem, portMAX_DELAY) == pdTRUE) {
+            xSemaphoreGive(lcd_refreshing_sem);
+        }
+        if(lcd_ui_task_not_paused || lcd_ui_task_resumed_for_times)
             task_delay_ms = lcd_ui_screen_draw();
         if(lcd_ui_task_running) {
 #if defined(CONFIG_DISPLAY_DRIVER_ST7789)
@@ -1170,7 +1209,7 @@ void lcd_ui_task(void *args) {
             UNUSED_PARAMETER(task_delay_ms);
 #else
             ms = get_millis() + task_delay_ms;
-            ILOG(TAG, "[%s] will delay for %lu ms", __FUNCTION__, task_delay_ms);
+            // ILOG(TAG, "[%s] will delay for %lu ms", __FUNCTION__, task_delay_ms);
             while (lcd_ui_task_running && get_millis() < ms) {
                 delay_ms(L_LVGL_TASK_MAX_DELAY_MS);
             }
@@ -1182,44 +1221,143 @@ void lcd_ui_task(void *args) {
     vTaskDelete(NULL);
 }
 
-void cancel_lcd_ui_delay() {
-    ILOG(TAG, "[%s]", __func__);
-    ms=0;
+void lcd_ui_request_fast_refresh() {
+    ILOG(TAG, "[%s] at %ld ", __func__, count);
+    display_epd_request_fast_update();
 }
 
-uint32_t get_lcd_ui_count() {
-    return count;
+void lcd_ui_task_req_fast_refresh(int8_t fast_refresh_time) {
+    ILOG(TAG, "[%s] at %ld fast_refresh_time: %hhd", __func__, count, fast_refresh_time);
+    if(xSemaphoreTake(lcd_refreshing_sem, portMAX_DELAY) == pdTRUE) {
+        if(lcd_ui_task_fast_refresh_on_time<count && fast_refresh_time>=0) {
+            lcd_ui_task_fast_refresh_on_time = count+fast_refresh_time;
+            if(lcd_ui_task_fast_refresh_on_time == lcd_ui_task_full_refresh_on_time) {
+                lcd_ui_task_full_refresh_on_time++;
+            }
+        }
+        xSemaphoreGive(lcd_refreshing_sem);
+    }
 }
 
-void pause_lcd_ui_task() {
-    ILOG(TAG, "[%s]", __func__);
-    lcd_ui_task_paused = true;
-}
-
-bool lcd_ui_task_is_paused() {
-    return lcd_ui_task_paused;
+void lcd_ui_task_cancel_req_fast_refresh() {
+    ILOG(TAG, "[%s] at %ld", __func__, count);
+    lcd_ui_task_fast_refresh_on_time = -1;
 }
 
 void lcd_ui_request_full_refresh(bool force) {
-    ILOG(TAG, "[%s] force: %d count:%lu last_refr_counter:%lu", __func__, force ?1:0, count, count_last_full_refresh);
+    ILOG(TAG, "[%s] at %ld force: %d count:%lu last_refr_counter:%lu", __func__, count, force ?1:0, count, count_last_full_refresh);
     if(force || count==1 || count_last_full_refresh + 5  < count)
         display_epd_request_full_update();
     count_last_full_refresh = count;
 }
 
-// void lcd_ui_request_fast_refresh(bool force) {
-//     ILOG(TAG, "[%s] force: %d count:%lu last_fast_refr_counter:%lu", __func__, force ?1:0, count, count_last_fast_refresh);
-//     if(force || count_last_full_refresh + 5  < count || count_last_fast_refresh + 5  < count)
-//         display_epd_request_fast_update();
-// }
+void lcd_ui_task_req_full_refresh(int8_t full_refresh_time, bool full_refresh_force) {
+    ILOG(TAG, "[%s] at %ld full_refresh_time: %hhd, full_refresh_force: %d", __func__, count, full_refresh_time, full_refresh_force);
+    if(xSemaphoreTake(lcd_refreshing_sem, portMAX_DELAY) == pdTRUE) {
+        if(lcd_ui_task_full_refresh_on_time<count && full_refresh_time>=0) {
+            lcd_ui_task_full_refresh_on_time = count+full_refresh_time;
+            lcd_ui_task_full_refresh_on_time_force = full_refresh_force;
+        }
+        xSemaphoreGive(lcd_refreshing_sem);
+    }
+}
+
+void lcd_ui_task_cancel_req_full_refresh() {
+    ILOG(TAG, "[%s] at %ld", __func__, count);
+    lcd_ui_task_full_refresh_on_time = -1;
+    lcd_ui_task_full_refresh_on_time_force = false;
+}
+
+static esp_timer_handle_t lcd_periodic_timer = 0;
+
+static esp_err_t lcd_ui_task_resume_for_times_wo_timer(uint8_t times, int8_t fast_refresh_time, int8_t full_refresh_time, bool full_refresh_force) {
+    ILOG(TAG, "[%s] at %ld times: %hhu, full_refresh_time: %hhd, full_refresh_force: %d", __FUNCTION__, count, times, full_refresh_time, full_refresh_force);
+    if(lcd_ui_task_running) {
+        if(xSemaphoreTake(lcd_refreshing_sem, portMAX_DELAY) == pdTRUE) {
+            lcd_ui_task_resumed_for_times += times;
+            if(lcd_ui_task_resumed_for_times>times) {
+                lcd_ui_task_resumed_for_times = times;
+            }
+            xSemaphoreGive(lcd_refreshing_sem);
+        }
+        if(lcd_ui_task_resumed_for_times>=times){
+            if(full_refresh_time>=0) {
+                lcd_ui_task_req_full_refresh(full_refresh_time, full_refresh_force);
+            }
+            if(fast_refresh_time>=0) {
+                lcd_ui_task_req_fast_refresh(fast_refresh_time);
+            }
+            return ESP_OK;
+        }
+    }
+    return ESP_ERR_TIMEOUT;
+}
+
+void lcd_ui_task_resume_for_times(uint8_t times, int8_t fast_refresh_time, int8_t full_refresh_time, bool full_refresh_force) {
+    ILOG(TAG, "[%s] at %ld times: %hhu, fast_refresh_time: %hhd, full_refresh_time: %hhd, full_refresh_force: %d", __func__, count, times, fast_refresh_time, full_refresh_time, full_refresh_force);
+    if(!lcd_ui_task_resume_for_times_wo_timer(times,fast_refresh_time,full_refresh_time, full_refresh_force)){
+        if(esp_timer_is_active(lcd_periodic_timer)) {
+            ILOG(TAG, "[%s] restart periodic timer at %ld", __func__, count);
+            ESP_ERROR_CHECK(esp_timer_stop(lcd_periodic_timer));
+        }
+        ILOG(TAG, "[%s] start periodic timer at %ld", __func__, count);
+        ESP_ERROR_CHECK(esp_timer_start_periodic(lcd_periodic_timer, LCD_UI_TIMER_PERIOD_S*1000000));
+    }
+}
+
+void cancel_lcd_ui_delay() {
+    ILOG(TAG, "[%s] at %ld", __func__, count);
+    ms=0;
+}
+
+uint32_t get_lcd_ui_count() {
+    if(xSemaphoreTake(lcd_refreshing_sem, portMAX_DELAY) == pdTRUE) {
+        xSemaphoreGive(lcd_refreshing_sem);
+    }
+    return count;
+}
+
+void lcd_ui_task_pause() {
+    ILOG(TAG, "[%s] at %ld", __func__, count);
+    lcd_ui_task_cancel_req_full_refresh();
+    lcd_ui_task_not_paused = 0;
+}
+
+void lcd_ui_task_resume() {
+    ILOG(TAG, "[%s] at %ld", __func__, count);
+    lcd_ui_task_cancel_req_full_refresh();
+    lcd_ui_task_not_paused = 1;
+    ms = 0;
+    if(esp_timer_is_active(lcd_periodic_timer)){
+        ILOG(TAG, "[%s] stop periodic timer at %ld", __func__, count);
+        ESP_ERROR_CHECK(esp_timer_stop(lcd_periodic_timer));
+    }
+}
+
+bool lcd_ui_task_is_paused() {
+    return lcd_ui_task_not_paused == 0;
+}
+
+void lcd_periodic_timer_cb(void*arg) {
+    ILOG(TAG, "[%s]", __func__);
+    lcd_ui_task_resume_for_times_wo_timer(2, 0, -1, false); // one partial refresh
+}
 
 static void lcd_ui_start() {
     ILOG(TAG, "[%s]", __func__);
     ui_init();
+    lcd_refreshing_sem = xSemaphoreCreateBinary();
+    xSemaphoreGive(lcd_refreshing_sem);
 #if !defined(CONFIG_DISPLAY_DRIVER_ST7789)
     lv_disp_t * disp = lv_disp_get_default();
     lv_timer_del(disp->refr_timer);
     disp->refr_timer = NULL;
+    const esp_timer_create_args_t lcd_periodic_timer_args = {
+        .callback = &lcd_periodic_timer_cb,
+        .name = "lcd_periodic",
+    };
+    ILOG(TAG, "[%s] create periodic timer", __func__);
+    ESP_ERROR_CHECK(esp_timer_create(&lcd_periodic_timer_args, &lcd_periodic_timer));
 #endif
 }
 
@@ -1244,10 +1382,22 @@ static void lcd_ui_stop() {
         }
         ++i;
     }
-    lcd_ui_screen_draw();
+    if(lcd_periodic_timer){
+        if(esp_timer_is_active(lcd_periodic_timer))
+            esp_timer_stop(lcd_periodic_timer);
+        ESP_ERROR_CHECK(esp_timer_delete(lcd_periodic_timer));
+        lcd_periodic_timer = 0;
+    }
+    if(screen_mode_counter<1)
+        lcd_ui_screen_draw();
     if(current_screen_mode == SCREEN_MODE_SLEEP) {
-        //lcd_ui_screen_draw();
-        delay_ms(4000);
+        if(screen_mode_counter<1)
+            lcd_ui_screen_draw(); // full refresh before sleep
+        delay_ms(2000);
+    }
+    if (lcd_refreshing_sem != NULL){
+        vSemaphoreDelete(lcd_refreshing_sem);
+        lcd_refreshing_sem = NULL;
     }
     ui_deinit();
     IMEAS_END(TAG, "[%s] %hu 20 ms loops, total %llu us ",  __FUNCTION__, i);

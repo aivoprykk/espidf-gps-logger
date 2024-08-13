@@ -1,7 +1,7 @@
 <template>
   <v-container>
     <v-row align="center" class="list px-3 mx-auto">
-    <v-col cols="10" sm="10" offset-sm="1">
+    <v-col>
       <v-card class="mx-auto" tile>
         <v-card-title>Logger Configuration</v-card-title>
         <v-data-table
@@ -14,12 +14,41 @@
           :hide-default-header="true"
           :loading="loadTable"
           loading-text="Loading data from device ..."
+          fixed-header
+          height="85vh"
         >
         <template v-slot:[`item.desc`]="{ item }">
           <div v-html="item.desc"></div>
         </template>
         <template v-slot:[`item.value`]="{ item }">
-            <span v-if="item && !item.values">
+            <span v-if="item && item.toggles">
+              <v-btn-toggle
+                style="display: table-cell"
+                v-model="item.tvalue"
+                v-on:change="updateConf(item)"
+                multiple
+              >
+                <v-btn v-for="(t, i) in item.toggles" :key="i" :value="i" v-on:click="updateToggle(item, i)">
+                  {{ t.title }}
+                </v-btn>
+              </v-btn-toggle>
+            </span>
+            <span v-else-if="item && item.values">
+
+            <v-select
+              v-model="item.value"
+              label="Select"
+              :items="item.values"
+              hide-details
+              single-line
+              :suffix="item.ext"
+              variant="outlined"
+              @update:modelValue="updateConf(item)"
+            ></v-select>
+
+            </span>
+            <span v-else>
+
             <span v-if="item.type != 'bool'">
               <v-text-field
                 v-model="item.value"
@@ -39,18 +68,7 @@
                 v-on:change="updateConf(item)"
               ></v-switch>
             </span>
-            </span>
-            <span v-else>
-            <v-select
-              v-model="item.value"
-              label="Select"
-              :items="item.values"
-              hide-details
-              single-line
-              :suffix="item.ext"
-              variant="outlined"
-              @update:modelValue="updateConf(item)"
-            ></v-select>
+
             </span>
           </template>
         </v-data-table>
@@ -142,6 +160,25 @@ export default {
     refreshList() {
       this.retrieveConfig();
     },
+    updateToggle(id) {
+      console.log(id);
+      if(id.tvalue) {
+        var val = 0;
+        id.toggles.forEach((v, i) => {
+          if(id.tvalue.includes(i)){
+            val |=(1<<i);
+          }
+          else {
+            val &=~(1<<i);
+          }
+        });
+        if(id.value != val) {
+          // console.log('updateToggle ' + id.name + ': ' + id.value + ' --> ' + val);
+          id.value = val;
+          this.updateConf(id);
+        }
+      }
+    },
     updateConf(id, val) {
       console.log(id);
       console.log(val);
@@ -159,13 +196,21 @@ export default {
         });
     },
     getDisplayConf(d) {
+      var toggles = [];
+      if(d.toggles) {
+        toggles = d.toggles.map((t, i) => {
+          if(d.value&t.value) return i;
+        });
+      }
       return {
         name: d.name,
         value: d.type && d.type == 'bool' ? (d.value == 1 ? true : false) : d.value,
         desc: d.info,
         type: d.type,
         values: d.values ? d.values : null,
-        selected: d.values ? {'name':d.name, 'value':d.value, 'type': d.type } : null
+        toggles: d.toggles ? d.toggles : null,
+        selected: d.values ? {'name':d.name, 'value':d.value, 'type': d.type } : null,
+        tvalue: toggles,
       };
     },
   },
@@ -192,6 +237,9 @@ export default {
     }
   },
   mounted() {
+    if(window.location.origin.includes('esp-logger')) {
+      axios.defaults.baseURL = window.location.origin + '/api/v1';
+    }
     this.retrieveConfig();
   },
 };

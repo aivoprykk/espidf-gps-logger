@@ -1,7 +1,7 @@
 import axios from "axios";
 
 export default axios.create({
-  baseURL: "http://esp-logger.local:80/api/v1",
+  baseURL: "http://esp-logger.local/api/v1",
   headers: {
     "Content-type": "application/json"
   },

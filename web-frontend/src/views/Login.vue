@@ -47,12 +47,16 @@ export default {
       token: ""
     };
   },
+  mounted() {
+    if(window.location.origin.includes('esp-logger')) {
+      axios.defaults.baseURL = window.location.origin + '/api/v1';
+    }
+  },
   methods: {
     ...mapMutations(["setUser", "setToken"]),
     login(e) {
       //e.preventDefault();
-      axios
-      .get('/login', {
+      axios.get('/login', {
           username: this.username,
           password: this.password
       },{

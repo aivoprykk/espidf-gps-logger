@@ -2,88 +2,109 @@
   <v-container>
     <v-row align="center" class="list px-3 mx-auto">
     <v-col >
-      <v-card class="mx-auto" tile>
-        <v-data-table
-          :headers="headers"
-          :items="items"
-          item-value="name"
-          :items-per-page="itemsPerPage"
-          v-model:sort-by="sortBy"
-          class="elevation-1"
-          :loading="loadTable"
-          loading-text="Loading files from device ..."
-          :disable-pagination="true"
-          :hide-default-footer="true"
-          :hide-default-header="true"
-        >
-         <template v-slot:top>
-<v-toolbar flat >
+    <v-card class="mx-auto" tile>
+    <v-data-table
+      :headers="headers"
+      :items="items"
+      item-value="name"
+      :items-per-page="itemsPerPage"
+      v-model:sort-by="sortBy"
+      class="elevation-1"
+      :loading="loadTable"
+      loading-text="Loading files from device ..."
+      :disable-pagination="true"
+      :hide-default-footer="true"
+      :hide-default-header="false"
+      v-model="selected"
+      fixed-header
+      height="85vh"
+    >
+    <template v-slot:top>
+      <v-toolbar flat >
         <v-toolbar-title>Files</v-toolbar-title>
         <v-spacer></v-spacer>
-        <v-col class="mx-auto" cols="6" sm="6">
-      <v-file-input
-
-          id="file"
-          v-model="files"
-          color="deep-purple-accent-4"
-          show-size
-          label="Upload file"
-          @change="selectFile"
-          hide-details
-            single-line
-        ></v-file-input>   </v-col>
-<span v-if="files.length">
-        <v-col class="mx-auto">
-<v-btn small @click="uploadFiles" icon="$upload" >
-
-          <v-icon right>$upload</v-icon>
-        </v-btn>
-
+        <v-col class="mx-auto" cols="3" sm="3">
+        <span v-if="selected.length">
+          <v-select
+            v-model="bulkselectfields.value"
+            @update:modelValue="bulkAction()"
+            :items=bulkselectfields.items
+            hide-details
+            density="compact"
+          ></v-select>
+        </span>
         </v-col>
-</span>
-</v-toolbar>
-
-         </template>
-          <template v-slot:[`item.name`]="{ item }">
-            <td>
-              <span v-if="item">
-              <span v-if="item.type != 'd'">
-              <a :href="getLink(item.name)">{{ item.name }}</a>
-              </span>
-              <span v-else>
-              <span @click="go(item.name)">{{ item.name }}</span>
-              </span>
-              </span>
-            </td>
-          </template>
-          <template v-slot:[`item.size`]="{ item }">
-            <span v-if="item">
-            <span v-if="!item.size && item.type != 'd'">
-              -
-            </span>
-            <span v-if="item.size && item.size > 1024 * 1024">
-              {{ (item.size / 1024 / 1024) | 0 }} MB
-            </span>
-            <span v-else-if="item.size && item.size > 1024">
-              {{ (item.size / 1024) | 0 }} KB
-            </span>
-            <span v-else>
-              {{ item.size }}
-            </span>
-            </span>
-          </template>
-          <template v-slot:[`item.actions`]="{ item }">
-            <span v-if="item">
-            <span v-if="item.type != 'd' && item.name != 'config.txt'">
-            <v-icon small @click="deleteFile(item.name)" icon="$delete" style="margin-right:0.5em"></v-icon>
-            <v-icon small @click="archiveFile(item.name)" icon="$archive"></v-icon>
-            </span>
-            </span>
-          </template>
-        </v-data-table>
-      </v-card>
+        <v-col class="mx-auto" cols="5" sm="5">
+          <v-file-input
+            id="file"
+            v-model="files"
+            color="deep-purple-accent-4"
+            show-size
+            label="Upload file"
+            @change="selectFile"
+            hide-details
+              single-line
+          >
+          </v-file-input>
+        </v-col>
+        <span v-if="files.length">
+        <v-col class="mx-auto">
+          <v-btn small @click="uploadFiles" icon="$upload" >
+            <v-icon right>$upload</v-icon>
+          </v-btn>
+        </v-col>
+        </span>
+      </v-toolbar>
+    </template>
+    <template v-slot:[`item.name`]="{ item }">
+      <td>
+      <span v-if="item.type != 'd' && item.name != 'config.txt'">
+      <v-checkbox-btn
+        :model-value="isSelected(item)"
+        color="primary"
+        @update:model-value="toggleSelect(item)"
+      ></v-checkbox-btn>
+      </span>
+      </td>
+      <td>
+        <span v-if="item">
+        <span v-if="item.type != 'd'">
+        <a :href="getLink(item.name)">{{ item.name }}</a>
+        </span>
+        <span v-else>
+        <span @click="go(item.name)">{{ item.name }}</span>
+        </span>
+        </span>
+      </td>
+    </template>
+    <template v-slot:[`item.size`]="{ item }">
+      <span v-if="item">
+      <span v-if="!item.size && item.type != 'd'">
+        -
+      </span>
+      <span v-if="item.size && item.size > 1024 * 1024">
+        {{ (item.size / 1024 / 1024) | 0 }} MB
+      </span>
+      <span v-else-if="item.size && item.size > 1024">
+        {{ (item.size / 1024) | 0 }} KB
+      </span>
+      <span v-else>
+        {{ item.size }}
+      </span>
+      </span>
+    </template>
+    <template v-slot:[`item.actions`]="{ item }">
+        <span v-if="item">
+        <span v-if="item.type != 'd' && item.name != 'config.txt'">
+        <v-icon small @click="deleteFile(item.name)" icon="$delete" style="margin-right:0.5em"></v-icon>
+        <v-icon small @click="archiveFile(item.name)" icon="$archive"></v-icon>
+        </span>
+        </span>
+    </template>
+    </v-data-table>
+    </v-card>
     </v-col>
-  </v-row>
+    </v-row>
   </v-container>
   <v-snackbar
       v-model="snackbar"
@@ -100,15 +121,15 @@
           Close
         </v-btn>
       </template>
-    </v-snackbar>
-    <v-dialog
+  </v-snackbar>
+  <v-dialog
       v-model="dialog"
       width="auto"
       ref="dlg"
       v-on:keyup.esc="dialogResult(false)"
       v-on:keyup.enter="dialogResult(true)"
-    >
-      <v-card>
+  >
+    <v-card>
         <v-card-text>
           <div>
           {{ dialogText }}
@@ -118,8 +139,8 @@
           <v-btn color="primary" variant="text" @click="dialogResult(true)">Ok</v-btn>
           <v-btn color="primary" variant="text" @click="dialogResult(false)">Cancel</v-btn>
         </v-card-actions>
-      </v-card>
-    </v-dialog>
+    </v-card>
+  </v-dialog>
 </template>
 
 <script>
@@ -134,6 +155,14 @@ export default {
       progress: 0,
       loadTable: true,
       itemsPerPage: -1,
+      selected: [],
+      bulkselectfields: {
+        value: 0,
+        items: [
+        { title: 'Action', value: 0, hidden: true },
+        { title: 'Delete', value: 1 },
+        { title: 'Archive', value: 2 }
+      ]},
       items: [],
       title: '',
       headers: [
@@ -153,10 +182,52 @@ export default {
     };
   },
   methods: {
+    isSelected(item) {
+      return this.selected.includes(item.name);
+    },
+    toggleSelect(item) {
+      if (this.selected.includes(item.name)) {
+        this.selected = this.selected.filter(i => i !== item.name);
+      } else {
+        this.selected.push(item.name);
+      }
+    },
+    bulkAction() {
+      // console.log(this.bulkselectfields.value);
+      if (this.bulkselectfields.value == 1) {
+        var n = '';
+        this.selected.forEach((item) => {
+          for(var i=0; i<this.items.length; i++) {
+            if (this.items[i].name == item && this.items[i].type != 'd') {
+              if(n.length) n += '|';
+              n += item;
+              break;
+            }
+          }
+        });
+        console.log('delete:' + n);
+        if(n.length > 0) this.deleteFile(n);
+      } else if (this.bulkselectfields.value == 2) {
+        var n = '';
+        this.selected.forEach((item) => {
+          for(var i=0; i<this.items.length; i++) {
+            if (this.items[i].name == item && this.items[i].type != 'd') {
+              if(n.length) n += '|';
+              n += item;
+              break;
+            }
+          }
+        });
+        console.log('archive:' + n);
+        if(n.length > 0) this.archiveFile(n);
+      }
+      this.selected = [];
+      this.bulkselectfields.value = 0;
+    },
     upload(evt) {
       let formData = new FormData();
       formData.append("fwfile", this.currentFile);
-      return axios.post("/files/upload", formData, {
+      return axios.post(this.$route.fullPath, formData, {
         headers: {
           "Content-Type": "multipart/form-data"
         },
@@ -198,7 +269,6 @@ export default {
     },
     getLink(name) {
       let base = axios.defaults.baseURL.replace(/\/api.*/, (this.$route.fullPath + '/'));
-      console.log(base+name);
       return base + name;
     },
     getAll() {
@@ -207,6 +277,13 @@ export default {
       return axios.get(path);
     },
     delete(id) {
+      console.log(id);
+      if(id && id.indexOf('|')>0) {
+        var i = {
+          name: id
+        };
+        return axios.post(this.$route.fullPath + '/delete', i);
+      }
       return axios.get(this.$route.fullPath + `/${id}/delete`);
     },
     go(id) {
@@ -228,7 +305,7 @@ export default {
             d = d.data;
           }
           this.items = d.map(this.getDisplayFile).filter(this.filterDisplayFile);
-          console.log(d);
+          // console.log(d);
           this.loadTable = false;
         })
         .catch((e) => {
@@ -288,6 +365,9 @@ export default {
     //this.retrieveFiles();
   },
   created() {
+    if(window.location.origin.includes('esp-logger')) {
+      axios.defaults.baseURL = window.location.origin + '/api/v1';
+    }
     // watch the params of the route to fetch the data again
     this.$watch(
       () => this.$route.params,

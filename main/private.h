@@ -145,21 +145,36 @@ struct record_forwarder_s {
     bool num;
 };
 
+struct push_forwarder_s {
+    const int state;
+    const char * title;
+};
+
 #if defined(CONFIG_DISPLAY_DRIVER_ST7789)
 #define LCD_UI_TASK_STACK_SIZE 5120
 #else
 #define LCD_UI_TASK_STACK_SIZE 3584
 #endif
+#define LCD_UI_TIMER_PERIOD_S 60
 
 uint32_t lcd_ui_screen_draw();
 void lcd_ui_task(void *args);
 void cancel_lcd_ui_delay();
 uint32_t get_lcd_ui_count();
 void lcd_ui_start_task();
-void pause_lcd_ui_task();
+void lcd_ui_task_pause();
+void lcd_ui_task_resume();
 uint16_t get_offscreen_counter();
 bool lcd_ui_task_is_paused();
+void lcd_ui_request_fast_refresh();
 void lcd_ui_request_full_refresh(bool force);
+void lcd_ui_task_resume_for_times(uint8_t times, int8_t fast_refresh_time, int8_t full_refresh_time, bool full_refresh_force);
+void lcd_ui_task_cancel_req_full_refresh();
+void lcd_ui_task_req_full_refresh(int8_t full_refresh_time, bool full_refresh_force);
+void lcd_ui_task_req_fast_refresh(int8_t full_refresh_time);
+void lcd_ui_task_cancel_req_fast_refresh();
+void wifi_sta_conf_sync();
+
 // void lcd_ui_request_fast_refresh(bool force);
 
 #ifdef __cplusplus
