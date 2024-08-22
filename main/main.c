@@ -293,7 +293,7 @@ static int shut_down_gps(int no_sleep) {
         m_context_rtc.RTC_R4_10s = avail_fields[19].value.num();
         m_context_rtc.RTC_R5_10s = avail_fields[20].value.num();
         if (m_context.gps.files_opened) {
-            if (m_context.config->log_txt) {
+            if (m_context.config->gps.log_txt) {
                 session_info(&m_context.gps, &m_context.gps.Ublox);
                 session_results_s(&m_context.gps, &m_context.gps.S2, m_context_rtc.RTC_calibration_speed);
                 session_results_s(&m_context.gps, &m_context.gps.S10, m_context_rtc.RTC_calibration_speed);
@@ -436,8 +436,8 @@ esp_err_t ubx_msg_do(ubx_msg_byte_ctx_t *mctx) {
                         ubx->signal_ok = true;
                         ubx->first_fix = (now - ubx->ready_time) / 1000;
                         ESP_LOGI(TAG, "[%s] First GPS Fix after %"PRIu16" sec.", __FUNCTION__, ubx->first_fix);
-                        if(m_config->screen_no_auto_refresh) {
-                            lcd_ui_task_resume_for_times(2, 0, 1, true);
+                        if(m_config->screen.screen_no_auto_refresh) {
+                            lcd_ui_task_resume_for_times(1, -1, -1, true);
                         }
                     }
                     if (ubx->signal_ok && gps->GPS_delay < UINT8_MAX) {
@@ -483,13 +483,13 @@ esp_err_t ubx_msg_do(ubx_msg_byte_ctx_t *mctx) {
                         //saved_count++;
                         if (gps->gps_speed > 1000) { // log only when speed is above 1 m/s == 3.6 km/h
                             log_to_file(gps);  // here it is also printed to serial !!
-                            if(m_config->screen_no_auto_refresh && lcd_ui_task_is_paused()) {
+                            if(m_config->screen.screen_no_auto_refresh && lcd_ui_task_is_paused()) {
                                 lcd_ui_task_resume();
                             }
                         }
-                        else if(m_config->screen_no_auto_refresh && !lcd_ui_task_is_paused()) {
+                        else if(m_config->screen.screen_no_auto_refresh && !lcd_ui_task_is_paused()) {
                             lcd_ui_task_pause();
-                            lcd_ui_task_resume_for_times(2, 0, 1, true);
+                            lcd_ui_task_resume_for_times(1, -1, -1, true);
                         }
                         ret = push_gps_data(gps, &gps->Ublox, nav_pvt->lat / 10000000.0f, nav_pvt->lon / 10000000.0f, gps->gps_speed);
                         if(ret){
@@ -700,10 +700,10 @@ static void button_timer_cb(void *arg) {
             }
             if (app_mode == APP_MODE_GPS){
                 if(cur_screen == CUR_SCREEN_GPS_SPEED) {
-                    ILOG(TAG, "[%s] gps info next screen requested, cur: %hhu", __func__, m_context.config->speed_field);
-                    m_context.config->speed_field++;
-                    if (m_context.config->speed_field > L_CONFIG_SPEED_FIELDS)
-                        m_context.config->speed_field = 1;
+                    ILOG(TAG, "[%s] gps info next screen requested, cur: %hhu", __func__, m_context.config->screen.speed_field);
+                    m_context.config->screen.speed_field++;
+                    if (m_context.config->screen.speed_field > L_CONFIG_SPEED_FIELDS)
+                        m_context.config->screen.speed_field = 1;
                     m_context.Field_choice = 1;
                 }
                 else if(cur_screen==CUR_SCREEN_GPS_STATS) {
@@ -714,7 +714,7 @@ static void button_timer_cb(void *arg) {
             }
         }
         refresh:
-        if(m_config->screen_no_auto_refresh && lcd_ui_task_is_paused()) {
+        if(m_config->screen.screen_no_auto_refresh && lcd_ui_task_is_paused()) {
             lcd_ui_task_resume_for_times(flush_times, fast_refr_time, -1, false); // one partial refresh
         }
     }
@@ -756,14 +756,22 @@ static void button_timer_cb(void *arg) {
                 wifi_mode(1, 1); // wifi set ap mode
             }
         }
-        if(m_config->screen_no_auto_refresh){
-            lcd_ui_task_resume_for_times(2, -1, -1, false);
+        if(m_config->screen.screen_no_auto_refresh){
+            lcd_ui_task_resume_for_times(1, -1, -1, false);
         }
         else
             lcd_ui_request_full_refresh(0);
     }
     else {
         ILOG(TAG, "[%s] Button triple click arrived.", __func__);
+        if(!(app_mode == APP_MODE_GPS && next_screen == CUR_SCREEN_SETTINGS)) {
+            ILOG(TAG, "[%s] screen rotation change requested", __func__);
+            if(set_screen_cfg_item(m_config, 6, m_context.filename, m_context.filename_backup, m_context.gps.ublox_config->rtc_conf->hw_type)) {
+                g_context_rtc_add_config(&m_context_rtc, m_context.config);
+                display_set_rotation(m_context_rtc.RTC_screen_rotation);
+            }
+            goto refresh;
+        }
         if (app_mode == APP_MODE_GPS) {
             if(next_screen==CUR_SCREEN_SETTINGS) {
                 ubx_hw_t hw_type = m_context.gps.ublox_config->rtc_conf->hw_type;
@@ -772,6 +780,7 @@ static void button_timer_cb(void *arg) {
                     if(set_gps_cfg_item(m_config, gps_cfg_item, m_context.filename, m_context.filename_backup, hw_type)) {
                         ILOG(TAG, "[%s] settings screen change requested", __func__);
                         g_context_ubx_add_config(&m_context, m_context.gps.ublox_config);
+                        g_context_rtc_add_config(&m_context_rtc, m_context.config);
                         ubx_restart_requested = 1;
                     }
                 }
@@ -784,10 +793,12 @@ static void button_timer_cb(void *arg) {
                 else if(cfg_screen >= CFG_SCREEN_SCREEN) {
                     if(set_screen_cfg_item(m_config, screen_cfg_item, m_context.filename, m_context.filename_backup, hw_type)) {
                         ILOG(TAG, "[%s] settings screen change requested", __func__);
+                        g_context_rtc_add_config(&m_context_rtc, m_context.config);
+                        display_set_rotation(m_context_rtc.RTC_screen_rotation);
                     }
                 }
-                if(m_config->screen_no_auto_refresh){
-                    lcd_ui_task_resume_for_times(2, -1, -1, false);
+                if(m_config->screen.screen_no_auto_refresh){
+                    lcd_ui_task_resume_for_times(1, -1, -1, false);
                 }
                 // lcd_ui_request_fast_refresh(0);
             }
@@ -843,7 +854,7 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
         break;
     case L_BUTTON_LONG_PRESS_START:
         button_press_mode = 1;
-        if(m_config->screen_no_auto_refresh){
+        if(m_config->screen.screen_no_auto_refresh){
             lcd_ui_task_resume_for_times(1, -1, -1, false);
         }
         break;
@@ -856,7 +867,7 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
         }
         else
             button_press_mode = 2;
-        if(m_config->screen_no_auto_refresh){
+        if(m_config->screen.screen_no_auto_refresh){
             lcd_ui_task_resume_for_times(1, -1, -1, false);
         }
         break;
@@ -880,7 +891,7 @@ uint32_t screen_cb(void* arg) {
     }
     bool run_is_active = false;
     if(app_mode == APP_MODE_GPS) {
-        run_is_active = (m_context.gps.ublox_config->signal_ok && m_context.gps.gps_speed / 1000.0f >= m_context.config->stat_speed);
+        run_is_active = (m_context.gps.ublox_config->signal_ok && m_context.gps.gps_speed / 1000.0f >= m_context.config->screen.stat_speed);
         if (run_is_active && next_screen != CUR_SCREEN_NONE){
             next_screen = CUR_SCREEN_NONE;
         }
@@ -1037,7 +1048,7 @@ uint32_t screen_cb(void* arg) {
             cur_screen = CUR_SCREEN_GPS_STATS;
         } else {
             if(!m_context.gps.ublox_config->ubx_msg.mon_ver.hwVersion[0] && m_context.gps.ublox_config->ready) goto gpstrblscr;
-            if (m_context.config->speed_large_font == 2) {
+            if (m_context.config->screen.speed_large_font == 2) {
                     delay=op->update_screen(dspl, SCREEN_MODE_SPEED_2, 0);
             } else {
                 if(op)
@@ -1339,13 +1350,13 @@ void init_power() {
 #endif    
 
 static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data) {
-    
+    uint8_t no_auto_refresh = m_config ? m_config->screen.screen_no_auto_refresh : 0;
     if(base == LOGGER_EVENT) {
         switch(id) {
             case LOGGER_EVENT_DATETIME_SET:
                 ILOG(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
-                if(m_config->screen_no_auto_refresh){
-                    lcd_ui_task_resume_for_times(2, 0, -1, false);
+                if(no_auto_refresh){
+                    lcd_ui_task_resume_for_times(1, -1, -1, false);
                 }
                 break;
             case LOGGER_EVENT_SDCARD_MOUNTED:
@@ -1357,8 +1368,8 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
                 ILOG(TAG, "[%s] %s", __FUNCTION__, logger_event_strings[id]);
                 m_context.sdOK = false;
                 m_context.freeSpace = 0;
-                if(m_config->screen_no_auto_refresh){
-                    lcd_ui_task_resume_for_times(2, 0, -1, false);
+                if(no_auto_refresh){
+                    lcd_ui_task_resume_for_times(1, -1, -1, false);
                 }
                 break;
             case LOGGER_EVENT_SDCARD_UNMOUNTED:
@@ -1392,14 +1403,14 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
                 break;
             case UBX_EVENT_UART_INIT_DONE:
                 ILOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
-                if(m_config->screen_no_auto_refresh){
-                    lcd_ui_task_resume_for_times(2, 0, 1, false);
+                if(no_auto_refresh && (cur_screen == CUR_SCREEN_GPS_INFO || cur_screen == CUR_SCREEN_NONE)){
+                    lcd_ui_task_resume_for_times(1, -1, -1, false);
                 }
                 break;
             case UBX_EVENT_UART_INIT_FAIL:
                 ILOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
-                if(m_config->screen_no_auto_refresh){
-                    lcd_ui_task_resume_for_times(2, 0, 1, false);
+                if(no_auto_refresh && (cur_screen == CUR_SCREEN_GPS_INFO || cur_screen == CUR_SCREEN_NONE)){
+                    lcd_ui_task_resume_for_times(1, -1, -1, false);
                 }
                 break;
             case UBX_EVENT_UART_DEINIT_DONE:
@@ -1407,14 +1418,14 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
                 break;
             case UBX_EVENT_SETUP_DONE:
                 ILOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
-                if(m_config->screen_no_auto_refresh){
-                    lcd_ui_task_resume_for_times(2, 0, 1, false);
+                if(no_auto_refresh){
+                    lcd_ui_task_resume_for_times(1, -1, -1, false);
                 }
                 break;
             case UBX_EVENT_SETUP_FAIL:
                 ILOG(TAG, "[%s] %s", __FUNCTION__, ubx_event_strings[id]);
-                if(m_config->screen_no_auto_refresh){
-                    lcd_ui_task_resume_for_times(2, 0, 1, false);
+                if(no_auto_refresh && (cur_screen == CUR_SCREEN_GPS_INFO || cur_screen == CUR_SCREEN_NONE)){
+                    lcd_ui_task_resume_for_times(1, -1, -1, false);
                 }
                 break;
             default:
@@ -1462,8 +1473,8 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
                 break;
             case ADC_EVENT_BATTERY_LOW:
                 ILOG(TAG, "[%s] %s", __FUNCTION__, adc_event_strings[id]);
-                if(m_config->screen_no_auto_refresh){
-                    lcd_ui_task_resume_for_times(2, 0, 1, false);
+                if(no_auto_refresh){
+                    lcd_ui_task_resume_for_times(1, -1, -1, false);
                 }
                 break;
             case ADC_EVENT_BATTERY_OK:
@@ -1478,8 +1489,8 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
         switch(id) {
             case WIFI_EVENT_AP_START:
                 ILOG(TAG, "[%s] %s", __FUNCTION__, wifi_event_strings[id]);
-                if(m_config->screen_no_auto_refresh){
-                    lcd_ui_task_resume_for_times(2, 0, 1, false);
+                if(no_auto_refresh){
+                    lcd_ui_task_resume_for_times(1, -1, -1, false);
                 }
                 break;
             case WIFI_EVENT_AP_STOP:
@@ -1493,14 +1504,14 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
         switch(id) {
             case IP_EVENT_STA_GOT_IP:
                 ILOG(TAG, "[%s] IP_EVENT_STA_GOT_IP", __FUNCTION__);
-                if(m_config->screen_no_auto_refresh){
-                    lcd_ui_task_resume_for_times(2, 0, 1, false);
+                if(no_auto_refresh){
+                    lcd_ui_task_resume_for_times(1, -1, -1, false);
                 }
                 break;
             case IP_EVENT_STA_LOST_IP:
                 ILOG(TAG, "[%s] IP_EVENT_STA_LOST_IP", __FUNCTION__);
-                if(m_config->screen_no_auto_refresh){
-                    lcd_ui_task_resume_for_times(2, 0, 1, false);
+                if(no_auto_refresh){
+                    lcd_ui_task_resume_for_times(1, -1, -1, false);
                 }
                 break;
             default:
@@ -1561,8 +1572,11 @@ void sd_mount_cb(void* arg) {
             ESP_LOGI(TAG, "[%s] sdcard mounted.", __FUNCTION__);
 
             config_load_json(m_config, m_context.filename, m_context.filename_backup);
-
+            if(m_config->screen.screen_rotation != m_context_rtc.RTC_screen_rotation) {
+                ILOG(TAG, "[%s] screen rotation change (rtc) %d to (conf) %d", __FUNCTION__, m_context_rtc.RTC_screen_rotation, m_config->screen.screen_rotation);
+            }
             g_context_rtc_add_config(&m_context_rtc, m_config);
+            display_set_rotation(m_context_rtc.RTC_screen_rotation);
             g_context_add_config(&m_context, m_config);
             config_fix_values(m_config);
             g_context_ubx_add_config(&m_context, 0);
@@ -1612,6 +1626,7 @@ static void setup(void) {
 #endif
 
     display_init(&display);
+    display_set_rotation(m_context_rtc.RTC_screen_rotation);
     delay_ms(50);
     // const esp_timer_create_args_t screen_periodic_timer_args = {
     //     .callback = &screen_cb,
@@ -1653,15 +1668,15 @@ static void setup(void) {
     if(!sdcard_init())
         sd_mount_cb(NULL);
 #if defined(CONFIG_DISPLAY_DRIVER_ST7789)
-    m_config->screen_no_auto_refresh = 0;
+    m_config->screen.screen_no_auto_refresh = 0;
 #else
-    m_config->screen_no_auto_refresh = 1;
+    m_config->screen.screen_no_auto_refresh = 1;
 #endif
-    if(m_config->screen_no_auto_refresh){
+    if(m_config->screen.screen_no_auto_refresh){
        lcd_ui_task_pause();
     }
     lcd_ui_start_task();
-    if(m_config->screen_no_auto_refresh){
+    if(m_config->screen.screen_no_auto_refresh){
        lcd_ui_task_resume_for_times(2, 0, 1, true);
     }
     // appstage 1, structures initialized, start gps.
@@ -1725,7 +1740,7 @@ void app_main(void) {
             m_context.request_shutdown = 1;
         }
         if(m_context.request_shutdown || m_context.request_restart || bat_timeout) {
-            if(m_config->screen_no_auto_refresh && lcd_ui_task_is_paused()) {
+            if(m_config->screen.screen_no_auto_refresh && lcd_ui_task_is_paused()) {
                 lcd_ui_task_resume_for_times(2, 0, -1, false); // one partial refresh
             }
             m_context.request_shutdown = 0;

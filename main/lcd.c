@@ -225,35 +225,35 @@ static const char * scr_fld_2[] = {
 };
 
 static int low_speed_seconds = 0;
-static esp_err_t speed_info_bar_update() {  // info bar when config->speed_large_font is 1 or 0
+static esp_err_t speed_info_bar_update() {  // info bar when config->screen.speed_large_font is 1 or 0
     const logger_config_t *config = m_context.config;
-    uint8_t field = m_context.config->speed_field;          // default is in config.txt
+    uint8_t field = m_context.config->screen.speed_field;          // default is in config.txt
     uint8_t bar_max = 240;                                  // 240 pixels is volledige bar
-    uint16_t bar_length = config->bar_length * 1000 / bar_max;  // default 100% length = 1852 m
-    uint8_t font_size = m_context.config->speed_large_font;
+    uint16_t bar_length = config->gps.bar_length * 1000 / bar_max;  // default 100% length = 1852 m
+    uint8_t font_size = m_context.config->screen.speed_large_font;
 
-    if (config->speed_field == 1) {  // only switch if config.field==1 !!!
+    if (config->screen.speed_field == 1) {  // only switch if config.field==1 !!!
         if (((int)(m_context.gps.Ublox.total_distance / 1000000) % 10 == 0) && (m_context.gps.Ublox.alfa_distance / 1000 > 1000))
             field = 5;  // indien x*10km, totale afstand laten zien
         // if(m_context.gps.S10.s_max_speed<(m_context.gps.S10.display_speed[5]*0.95))
         //     field=8;//if run slower dan 95% of slowest run, show 1h result
         if ((m_context.gps.Ublox.alfa_distance / 1000 < 350) && (m_context.gps.alfa_window < 100))
             field = 3;  // first 350 m after gibe  alfa screen !!
-        if (m_context.gps.Ublox.alfa_distance / 1000 > config->bar_length)
+        if (m_context.gps.Ublox.alfa_distance / 1000 > config->gps.bar_length)
             field = 4;  // run longer dan 1852 m, NM scherm !!
-    } else if (config->speed_field == 2) { // show Nautical Mile status
-        if (m_context.gps.Ublox.run_distance / 1000 > config->bar_length)
+    } else if (config->screen.speed_field == 2) { // show Nautical Mile status
+        if (m_context.gps.Ublox.run_distance / 1000 > config->gps.bar_length)
             field = 4;  // if run longer dan 1852 m, NM scherm !!
-    } else if (config->speed_field == 7) { // show alpha status
+    } else if (config->screen.speed_field == 7) { // show alpha status
         if ((m_context.gps.Ublox.alfa_distance / 1000 < 350) && (m_context.gps.alfa_window < 100))
             field = 3;  // first 350 m after gibe  alfa screen !!
         else
             field = 7;
-    } else if (config->speed_field == 8) { // show 1 hour status
+    } else if (config->screen.speed_field == 8) { // show 1 hour status
         field = 8;
-    } else if (config->speed_field == 9) {  // 1 hour default, but first alfa, and if good run, last run
+    } else if (config->screen.speed_field == 9) {  // 1 hour default, but first alfa, and if good run, last run
         field = 8;
-        if (m_context.gps.Ublox.alfa_distance / 1000 > config->bar_length)
+        if (m_context.gps.Ublox.alfa_distance / 1000 > config->gps.bar_length)
             field = 4;  // run longer dan 1852 m, NM scherm !!
         if (m_context.gps.S10.s_max_speed > m_context.gps.S10.display_speed[5])
             field = 1;  // if run faster then slowest run, show AVG & run
@@ -1340,7 +1340,7 @@ bool lcd_ui_task_is_paused() {
 
 void lcd_periodic_timer_cb(void*arg) {
     ILOG(TAG, "[%s]", __func__);
-    lcd_ui_task_resume_for_times_wo_timer(2, 0, -1, false); // one partial refresh
+    lcd_ui_task_resume_for_times_wo_timer(1, -1, -1, false); // one partial refresh
 }
 
 static void lcd_ui_start() {
@@ -1393,7 +1393,7 @@ static void lcd_ui_stop() {
     if(current_screen_mode == SCREEN_MODE_SLEEP) {
         if(screen_mode_counter<1)
             lcd_ui_screen_draw(); // full refresh before sleep
-        delay_ms(2000);
+        delay_ms(4000);
     }
     if (lcd_refreshing_sem != NULL){
         vSemaphoreDelete(lcd_refreshing_sem);
