@@ -109,6 +109,7 @@ uint8_t app_mode_gps_on = 0;
 static bool button_down = false;
 static uint8_t stat_screen_count = 0;
 uint32_t low_bat_countdown = 0;
+static uint8_t record_done = 255;
 
 static void low_to_sleep(uint64_t sleep_time) {
     ILOG(TAG, "[%s]", __func__);
@@ -487,9 +488,15 @@ esp_err_t ubx_msg_do(ubx_msg_byte_ctx_t *mctx) {
                                 lcd_ui_task_resume();
                             }
                         }
-                        else if(m_config->screen.screen_no_auto_refresh && !lcd_ui_task_is_paused()) {
-                            lcd_ui_task_pause();
-                            lcd_ui_task_resume_for_times(1, -1, -1, true);
+                        else if(m_config->screen.screen_no_auto_refresh) {
+                            if(!lcd_ui_task_is_paused()) {
+                                lcd_ui_task_pause();
+                                goto showscr;
+                            }
+                            if(record_done < 240) {
+                                showscr:
+                                lcd_ui_task_resume_for_times(1, -1, -1, true);
+                            }
                         }
                         ret = push_gps_data(gps, &gps->Ublox, nav_pvt->lat / 10000000.0f, nav_pvt->lon / 10000000.0f, gps->gps_speed);
                         if(ret){
@@ -880,7 +887,6 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
     }
 }
 
-static uint8_t record_done = 255;
 #define LOW_BAT_TRIGGER 7
 uint32_t screen_cb(void* arg) {
     ILOG(TAG, "[%s] %ld app_mode: %d, cur_screen: %d, next_screen: %d, count_failed: %hu", __func__, get_lcd_ui_count(), app_mode, cur_screen, next_screen, ubx_fail_count);

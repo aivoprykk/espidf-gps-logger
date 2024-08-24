@@ -1391,7 +1391,7 @@ static void lcd_ui_stop() {
     if(screen_mode_counter<1)
         lcd_ui_screen_draw();
     if(current_screen_mode == SCREEN_MODE_SLEEP) {
-        if(screen_mode_counter<1)
+        if(screen_mode_counter<2)
             lcd_ui_screen_draw(); // full refresh before sleep
         delay_ms(4000);
     }
