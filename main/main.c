@@ -828,9 +828,9 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
         button_down = false;
         if(num==0) {
             esp_timer_start_once(button_timer, BUTTON_CB_WAIT_BEFORE);
-#ifdef CONFIG_BTN_GPIO_INPUT_1_ACTIVE
+#if defined(CONFIG_LOGGER_BUTTON_GPIO_1)
         } else if(num==1) {
-            if(tm >= CONFIG_BTN_GPIO_INPUT_LONG_PRESS_TIME_MS) {
+            if(tm >= CONFIG_LOGGER_BUTTON_LONG_PRESS_TIME_MS) {
                 if (m_context.gps.ublox_config->ready && m_context.gps.ublox_config->signal_ok) {
                     reset_time_stats(&m_context.gps.s10);
                     reset_time_stats(&m_context.gps.s2);
@@ -1215,7 +1215,7 @@ static void init_button() {
     ILOG(TAG, "[%s]", __func__);
     button_init();
     btns[0].cb = button_cb;
-#ifdef CONFIG_BTN_GPIO_INPUT_1_ACTIVE
+#if defined(CONFIG_LOGGER_BUTTON_GPIO_1)
     btns[1].cb = button_cb;
 #endif
 }

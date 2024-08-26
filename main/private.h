@@ -75,10 +75,10 @@ typedef struct v_settings_s {
 
 //#define STATIC_DEBUG        //indien gps test zonder snelheid en met wifi actief
 //#define DLS                  //set date on march 26 1:55, to test daylightsaving
-#if defined(CONFIG_BTN_GPIO_INPUT_1_ACTIVE)
+#if defined(CONFIG_LOGGER_BUTTON_GPIO_1)
 #define GPIO12_ACTIF        //if GPIO12 is used as wake up, standard GPIO12 function is not activated !!
 #endif
-#define WAKE_UP_GPIO CONFIG_BTN_GPIO_INPUT_0   //default 39
+#define WAKE_UP_GPIO CONFIG_LOGGER_BUTTON_GPIO_0   //default 39
 #define EPOCH_2022 1640995200UL //start of the year 2022 1640995200
 
 uint32_t screen_cb(void* arg);
