@@ -44,6 +44,7 @@ typedef enum {
     SCREEN_MODE_SETTINGS = 21,
     SCREEN_MODE_LOW_BAT = 22,
     SCREEN_MODE_OFF_SCREEN = 23,
+    SCREEN_MODE_FW_UPDATE = 24,
     SCREEN_MODE_SPEED_1 = 'a',
     SCREEN_MODE_SPEED_2 = 'b',
 } screen_mode_t;

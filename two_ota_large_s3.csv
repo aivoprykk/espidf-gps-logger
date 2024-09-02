@@ -8,5 +8,5 @@ emul_efuse,data,efuse,   ,         0x2000
 factory,  app,  factory, ,         2000K
 ota_0,    app,  ota_0,   ,         2000K
 ota_1,    app,  ota_1,   ,         2000K
-coredump, data, coredump,,         64K
-store,data,spiffs,,         4000K
+fatstore, data, fat,     ,         4000K
+littlestore,data,spiffs, ,         4000K

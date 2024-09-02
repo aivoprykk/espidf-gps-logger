@@ -57,12 +57,15 @@ typedef enum {
     CUR_SCREEN_LOW_BAT,
     CUR_SCREEN_SETTINGS,
     CUR_SCREEN_BOOT,
+    CUR_SCREEN_FW_UPDATE,
+    CUR_SCREEN_SD_TROUBLE
 } cur_screens_t;
 
 typedef enum {
-    CFG_GROUP_GPS = 0,
-    CFG_GROUP_STAT_SCREENS = 1,
-    CFG_GROUP_SCREEN = 2,
+    CFG_GROUP_GPS = 0x00,
+    CFG_GROUP_STAT_SCREENS = 0x01,
+    CFG_GROUP_SCREEN = 0x02,
+    CFG_GROUP_FW = 0x03
 } config_group_t;
 
 typedef struct v_settings_s {

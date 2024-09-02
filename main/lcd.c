@@ -135,6 +135,13 @@ static uint32_t _sleep_screen(const struct display_s *me, int choice) {
     current_screen_mode = SCREEN_MODE_SLEEP;
     showSleepScreen();
     statusbar_update();
+    uint8_t num = m_context_rtc.RTC_Sail_Logo > 0 ? m_context_rtc.RTC_Sail_Logo - 1 : 0;
+    const lv_img_dsc_t * img = sail_logo_img[num];
+    lv_img_set_src(ui_sleep_screen.bottom_img, img ? img : sail_logo_img[0]);
+    num = m_context_rtc.RTC_Board_Logo > 0 ? m_context_rtc.RTC_Board_Logo - 1 : 0;
+    img = board_logo_img[num];
+    lv_img_set_src(ui_sleep_screen.up_img, img ? img : board_logo_img[0]);
+
     for(int i = 0; i < 6; i++) {
         for(int j = 0; j < 2; j++) {
             f2_to_char(*sleep_scr_info_fields[j][i].data, p);
@@ -893,6 +900,12 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 link_for_low_bat:
                 showLowBatScreen();
                 break;
+            case SCREEN_MODE_FW_UPDATE:
+                const v_settings_t *s = arg;
+                const logger_config_item_t *i = (const logger_config_item_t *)s->settings_data;
+                ui_set_main_cnt_offset(&ui_info_screen.screen, offset_mark);
+                showFwUpdateScreen(s->name, i->name, i->desc);
+                break;
             case SCREEN_MODE_SHUT_DOWN:
                 ui_flush_screens(&ui_init_screen.screen);
                 float session_time = avail_fields[59].value.num();
@@ -1193,6 +1206,7 @@ uint32_t lcd_ui_screen_draw() {
 };
 
 uint32_t ms = 0;
+TaskHandle_t lcd_ui_task_handle = 0;
 
 void lcd_ui_task(void *args) {
     ILOG(TAG, "[%s] task starting", __FUNCTION__);
@@ -1216,8 +1230,15 @@ void lcd_ui_task(void *args) {
 #endif
         }
     }
+    if(screen_mode_counter<1)
+        lcd_ui_screen_draw();
+    if(current_screen_mode == SCREEN_MODE_SLEEP) {
+        if(screen_mode_counter<2)
+            lcd_ui_screen_draw(); // full refresh before sleep
+    }
     ILOG(TAG, "[%s] task finishing", __FUNCTION__);
     lcd_ui_task_finished = 1;
+    lcd_ui_task_handle = 0;
     vTaskDelete(NULL);
 }
 
@@ -1361,7 +1382,6 @@ static void lcd_ui_start() {
 #endif
 }
 
-TaskHandle_t lcd_ui_task_handle = 0;
 void lcd_ui_start_task() {
     ILOG(TAG, "[%s]", __func__);
     xTaskCreate(lcd_ui_task, "lcd_ui_task", LCD_UI_TASK_STACK_SIZE, NULL, 5, &lcd_ui_task_handle);
@@ -1370,37 +1390,35 @@ void lcd_ui_start_task() {
 static void lcd_ui_stop() {
     ILOG(TAG, "[%s]", __func__);
     IMEAS_START();
-    uint32_t wait = get_millis() + 3000;
+    uint32_t wait = get_millis() + 15000;
     lcd_ui_task_running = false;
     uint16_t i = 0;
     while (!lcd_ui_task_finished) {
         delay_ms(150);
         if (get_millis() > wait) {
-            if(lcd_ui_task_handle)
+            if(lcd_ui_task_handle){
+                ILOG(TAG, "[%s] task not finished, deleting", __func__);
                 vTaskDelete(lcd_ui_task_handle);
+            }
             break;
         }
         ++i;
     }
+    ILOG(TAG, "[%s] task finished, %hu 150 ms loops, now delete timer and wait 4 more seconds", __func__, i);
     if(lcd_periodic_timer){
         if(esp_timer_is_active(lcd_periodic_timer))
             esp_timer_stop(lcd_periodic_timer);
         ESP_ERROR_CHECK(esp_timer_delete(lcd_periodic_timer));
         lcd_periodic_timer = 0;
     }
-    if(screen_mode_counter<1)
-        lcd_ui_screen_draw();
-    if(current_screen_mode == SCREEN_MODE_SLEEP) {
-        if(screen_mode_counter<2)
-            lcd_ui_screen_draw(); // full refresh before sleep
-        delay_ms(4000);
-    }
+    delay_ms(4000);
+    
     if (lcd_refreshing_sem != NULL){
         vSemaphoreDelete(lcd_refreshing_sem);
         lcd_refreshing_sem = NULL;
     }
     ui_deinit();
-    IMEAS_END(TAG, "[%s] %hu 20 ms loops, total %llu us ",  __FUNCTION__, i);
+    IMEAS_END(TAG, "[%s] %hu 150 ms loops, total %llu us ",  __FUNCTION__, i);
 }
 
 void display_uninit(struct display_s *me) {

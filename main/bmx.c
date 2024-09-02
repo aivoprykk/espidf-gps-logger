@@ -113,6 +113,7 @@ esp_err_t init_bmx() {
 
 void deinit_bmx() {
     vTaskDelete(t1);
+    t1 = 0;
     bmx280_close(bmx280);
 }
 
