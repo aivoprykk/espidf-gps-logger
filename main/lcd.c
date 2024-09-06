@@ -1194,7 +1194,12 @@ uint32_t lcd_ui_screen_draw() {
     uint32_t timer_delay_ms = lcd_lv_timer_handler();
     IMEAS_END(TAG, "[%s] .. %ld next delay %lu ms, timer_handler took: %llu us",  __FUNCTION__, count, timer_delay_ms);
 #if !defined(CONFIG_DISPLAY_DRIVER_ST7789)
+#if LVGL_VERSION_MAJOR <= 8
     _lv_disp_refr_timer(NULL);
+#else
+#include "../components/lvgl/src/core/lv_refr_private.h"
+    _lv_disp_refr_timer(NULL);
+#endif
     count_flushed = count;
 #else
     if(timer_delay_ms > task_delay_ms)
@@ -1371,8 +1376,12 @@ static void lcd_ui_start() {
     xSemaphoreGive(lcd_refreshing_sem);
 #if !defined(CONFIG_DISPLAY_DRIVER_ST7789)
     lv_disp_t * disp = lv_disp_get_default();
+#if LVGL_VERSION_MAJOR <= 8
     lv_timer_del(disp->refr_timer);
     disp->refr_timer = NULL;
+#else
+    lv_display_delete_refr_timer(disp);
+#endif
     const esp_timer_create_args_t lcd_periodic_timer_args = {
         .callback = &lcd_periodic_timer_cb,
         .name = "lcd_periodic",
