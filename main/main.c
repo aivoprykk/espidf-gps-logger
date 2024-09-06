@@ -338,8 +338,7 @@ static int shut_down_gps(int no_sleep) {
         m_context_rtc.RTC_month = ((tms.tm_mon) + 1);
         m_context_rtc.RTC_day = (tms.tm_mday);
         m_context_rtc.RTC_hour = (tms.tm_hour);
-        m_context_rtc.RTC_min = (tms.tm_min);
-        m_context.gps.ublox_config->time_set = 0;
+        m_context_rtc.RTC_min = (tms.tm_min);    
     }
     uint32_t timeout = get_millis() + 5000; // wait for 3 seconds
     if(t1) {
@@ -352,12 +351,16 @@ static int shut_down_gps(int no_sleep) {
         delay_ms(100);
     }
     ubx_off(m_context.gps.ublox_config);
+    m_context.gps.ublox_config->time_set = 0;
 #if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
     task_memory_info(__func__);
 #endif
     if (!no_sleep) {
         go_to_sleep(3);  // got to sleep after 5 s, this to prevent booting when
         // GPIO39 is still low !
+    }
+    if(next_screen == CUR_SCREEN_SAVE_SESSION) {
+        next_screen = CUR_SCREEN_NONE;
     }
     return ret;
 }
