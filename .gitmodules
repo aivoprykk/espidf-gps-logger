@@ -34,9 +34,6 @@
 [submodule "components/logger_button"]
 	path = components/logger_button
 	url = ssh://git@github.com/aivoprykk/logger_button.git
-[submodule "components/esp_littlefs"]
-	path = components/esp_littlefs
-	url = https://github.com/joltwallet/esp_littlefs.git
 [submodule "components/esp_lcd_panel_ssd1680"]
 	path = components/esp_lcd_panel_ssd1680
 	url = ssh://git@github.com/aivoprykk/esp_lcd_panel_ssd1680.git
