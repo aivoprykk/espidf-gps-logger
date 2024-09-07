@@ -2,7 +2,7 @@
 dependencies:
 ## Required IDF version
   idf: ">=5.1"
-  #lvgl/lvgl: "=8.3.*"
+  lvgl/lvgl: "=8.*"
   #lvgl/lvgl_esp32_drivers: "^0.0.3"
   espressif/mdns: "=1.2.4"
   # # Put list of dependencies here

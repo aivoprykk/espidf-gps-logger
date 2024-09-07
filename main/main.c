@@ -1722,7 +1722,7 @@ static void setup(void) {
 #endif
 
 #if defined(DEBUG)
-    ESP_LOGI(TAG, "[%s] verbosity mode from common module %d.", __FUNCTION__, CONFIG_LOGGER_COMMON_LOG_LEVEL);
+    ESP_LOGI(TAG, "[%s] verbosity mode module %d.", __FUNCTION__, CONFIG_LOGGER_COMMON_LOG_LEVEL);
 #elif defined(NDEBUG)
     ESP_LOGI(TAG, "[%s] silent mode.", __FUNCTION__);
 #else

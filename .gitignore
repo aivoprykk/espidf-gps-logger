@@ -6,3 +6,5 @@ managed_components
 local_components
 dependencies.lock
 .old
+version.txt
+sdkconfig*

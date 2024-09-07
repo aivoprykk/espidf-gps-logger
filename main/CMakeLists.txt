@@ -1,4 +1,21 @@
 
+set(pdir ${CMAKE_CURRENT_SOURCE_DIR}/../)
+
+##second stage !important! after component register
+if(CONFIG_LOGGER_BUILD_MODE_DEV)
+MESSAGE("Dev mode selected")
+set(ver "${CONFIG_LOGGER_VERSION_MAJOR}.${CONFIG_LOGGER_VERSION_MINOR}.${CONFIG_LOGGER_VERSION_PATCH}.${CONFIG_LOGGER_VERSION_BUILD}.dev")
+set_source_files_properties(${srcs} PROPERTIES COMPILE_FLAGS "-DDEBUG")
+write_file("${pdir}version.txt" "${ver}")
+else()
+if(CONFGIG_LOGGER_BUILD_MODE_PROD)
+MESSAGE("Prod mode selected")
+set(ver "${CONFIG_LOGGER_VERSION_MAJOR}.${CONFIG_LOGGER_VERSION_MINOR}.${CONFIG_LOGGER_VERSION_PATCH}.${CONFIG_LOGGER_VERSION_BUILD}")
+set_source_files_properties(${srcs} PROPERTIES COMPILE_FLAGS "-DNDEBUG")
+write_file("${pdir}version.txt" "${ver}")
+endif()
+endif()
+
 set(srcs
 "main.c"
 "dstat_screens.c"
@@ -31,15 +48,6 @@ idf_component_register(SRCS ${srcs}
 UNSET(REQ)
 UNSET(PRIVREQ)
 
-##second stage !important! after component register
-if(CONFIG_VERBOSE_BUILD)
-MESSAGE("VERBOSE_BUILD selected")
-set_source_files_properties(${srcs} PROPERTIES COMPILE_FLAGS "-DDEBUG")
-else()
-set_source_files_properties(${srcs} PROPERTIES COMPILE_FLAGS "-DNDEBUG")
-endif()
-
-set(pdir ${CMAKE_CURRENT_SOURCE_DIR}/../)
 
 MESSAGE("---- testing if flash_data exists in ${CMAKE_CURRENT_SOURCE_DIR}/../flash_data")
 if(DEFINED CONFIG_IDF_TARGET_ESP32S3)
