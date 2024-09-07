@@ -8,4 +8,4 @@ emul_efuse,data,efuse,   ,         0x2000
 ota_0,    app,  ota_0,   ,         1600K
 ota_1,    app,  ota_1,   ,         1600K
 coredump, data, coredump,,         64K
-store,    data, spiffs,  ,         512K
+fatstore,    data, fat,  ,         512K
