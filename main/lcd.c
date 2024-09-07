@@ -6,12 +6,7 @@
 
 #include "display.h"
 #include "private.h"
-#if defined(CONFIG_DISPLAY_USE_EPD)
-#include <epdg.h>
-#include <gfxfont.h>
-#else
 #include "driver_vendor.h"
-#endif
 
 #if defined(CONFIG_BMX_ENABLE)
 #include "bmx280.h"
@@ -25,43 +20,30 @@
 #include "gps_data.h"
 #include "ubx.h"
 #include "logger_wifi.h"
-#if defined(STATUS_PANEL_V1)
-// #include "ui.h"
-#else
-#include "lv_comp_statusbar.h"
-#endif
 
 #define UI_INFO_SCREEN ui_InfoScreen
 #define UI_SPEED_SCREEN ui_SpeedScreen
 #define UI_STATS_SCREEN ui_StatsScreen
-#define UI_SPEED_MAIN_SLOT UI_COMP_BIGDATAPANEL_DATALABEL
-
-#define UI_LOGO_IMG espidf_logo_v2_48px
-
-extern struct context_s m_context;
-extern struct context_rtc_s m_context_rtc;
-//extern struct UBXMessage ubxMessage;
-extern struct m_wifi_context wifi_context;
-static void lcd_ui_start();
-static uint8_t lcd_ui_task_resumed_for_times = 0;
-static int8_t lcd_ui_task_full_refresh_on_time = 0;
-static int8_t lcd_ui_task_fast_refresh_on_time = 0;
-static bool lcd_ui_task_full_refresh_on_time_force = false;
-static bool lcd_ui_task_running = true;
-static bool lcd_ui_task_not_paused  = true;
-static bool lcd_ui_task_finished = 0;
-static SemaphoreHandle_t lcd_refreshing_sem = NULL;
-
-
-esp_lcd_panel_handle_t dspl = 0;
-screen_mode_t current_screen_mode = SCREEN_MODE_UNKNOWN, old_screen_mode = SCREEN_MODE_UNKNOWN;
-
-extern stat_screen_t sc_screens[];
 
 struct display_state_s {
     bool initialized;
     uint16_t update_delay;
 };
+
+typedef struct sleep_scr_s {
+    float *data;
+    const char *info;
+} sleep_scr_t;
+
+typedef struct sat_count_s {
+    uint8_t gps;
+    uint8_t sbas;
+    uint8_t galileo;
+    uint8_t beidou;
+    uint8_t qzss;
+    uint8_t glonass;
+    uint8_t navic;
+} sat_count_t;
 
 struct display_priv_s {
     struct display_state_s state;
@@ -71,39 +53,33 @@ struct display_priv_s {
     bool displayOK;
 };
 
-struct display_priv_s display_priv = {{false}, 0, 0, 0, 0, false};
-
-static const char *TAG = "lcd";
-
-static esp_err_t reset_display_state(struct display_state_s *display_state) {
-    ILOG(TAG, "[%s]", __func__);
-    display_state->initialized = 0;
-    return ESP_OK;
-}
+extern struct context_s m_context;
+extern struct context_rtc_s m_context_rtc;
+//extern struct UBXMessage ubxMessage;
+extern struct m_wifi_context wifi_context;
 
 static uint32_t count = 0, count_last_full_refresh = 0, count_last_fast_refresh = 0;
 static int32_t count_flushed = -1;
 static uint8_t dots_counter = 0, offscreen_counter = 0;
+static uint8_t lcd_ui_task_resumed_for_times = 0;
+static int8_t lcd_ui_task_full_refresh_on_time = 0;
+static int8_t lcd_ui_task_fast_refresh_on_time = 0;
+static bool lcd_ui_task_full_refresh_on_time_force = false;
+static bool lcd_ui_task_running = true;
+static bool lcd_ui_task_not_paused  = true;
+static bool lcd_ui_task_finished = 0;
+static SemaphoreHandle_t lcd_refreshing_sem = NULL;
 
-#if !defined(CONFIG_DISPLAY_DRIVER_ST7789)
-size_t append_dots(char * p, uint8_t max_dots, uint8_t * cur_dots) {
-    if(!p) return 0;
-    if((*cur_dots)++ > max_dots) *cur_dots = 1;
-    char * i = p + (*cur_dots) - 1, *j = p;
-    for(; j < i; j++) *j = '.';
-    i = p + max_dots;
-    for(; j < i; j++) *j = ' ';
-    *j = 0;
-    return j - p;
-}
-#else
-#define append_dots(p, max_dots, cur_dots) do{}while(0)
+#if defined(CONFIG_BMX_ENABLE)
+extern bmx280_t *bmx280;
 #endif
 
-typedef struct sleep_scr_s {
-    float *data;
-    const char *info;
-} sleep_scr_t;
+static float last_temp=0;
+
+esp_lcd_panel_handle_t dspl = 0;
+screen_mode_t current_screen_mode = SCREEN_MODE_UNKNOWN, old_screen_mode = SCREEN_MODE_UNKNOWN;
+
+extern stat_screen_t sc_screens[];
 
 static const struct sleep_scr_s sleep_scr_info_fields[2][6] = {
     {
@@ -123,6 +99,71 @@ static const struct sleep_scr_s sleep_scr_info_fields[2][6] = {
         {&m_context_rtc.RTC_alp, "Alfa:"}
     }
 };
+
+static const char *scr_fld[2][8][2] = {
+    {
+        {"Run", "Avg"},
+        {"Gate", "Ex"},
+        {"AlpR", "AlpM"},
+        {"NmR", "NmM"},
+        {"Dst", "500M"},
+        {"2sM", "10sM"},
+        {".5hR", ".5hM"},
+        {"1hR", "1hM"},
+    },
+    {
+        {"R", "A"},
+        {"G", "E"},
+        {"AlR", 0},
+        {"NmR", ""},
+        {0, 0},
+        {0, 0},
+        {0, 0},
+        {0, 0},
+    }
+};
+
+static const char * scr_fld_2[] = {
+    "-.--",
+    "0.00"
+};
+
+static int low_speed_seconds = 0;
+static int16_t gps_image_angle = 0;
+static uint8_t gblink = 0;
+sat_count_t sat_count = {0};
+char gps_status_str[32] = {0};
+char bat_status_str[32] = {0};
+static int8_t offset_mark = 0;
+static uint8_t offset_mark_dir = 0;
+static uint32_t next_gps_str_update = 0;
+static uint16_t screen_mode_counter = 0;
+struct display_priv_s display_priv = {{false}, 0, 0, 0, 0, false};
+
+static const char *TAG = "lcd";
+
+static void lcd_ui_start();
+
+static esp_err_t reset_display_state(struct display_state_s *display_state) {
+    ILOG(TAG, "[%s]", __func__);
+    display_state->initialized = 0;
+    return ESP_OK;
+}
+
+#if !defined(CONFIG_DISPLAY_DRIVER_ST7789)
+size_t append_dots(char * p, uint8_t max_dots, uint8_t * cur_dots) {
+    if(!p) return 0;
+    if((*cur_dots)++ > max_dots) *cur_dots = 1;
+    char * i = p + (*cur_dots) - 1, *j = p;
+    for(; j < i; j++) *j = '.';
+    i = p + max_dots;
+    for(; j < i; j++) *j = ' ';
+    *j = 0;
+    return j - p;
+}
+#else
+#define append_dots(p, max_dots, cur_dots) do{}while(0)
+#endif
 
 static void statusbar_update();
 
@@ -162,12 +203,6 @@ static size_t bat_to_char(char *str, uint8_t full) {
     return p - str;
 }
 
-#if defined(CONFIG_BMX_ENABLE)
-extern bmx280_t *bmx280;
-#endif
-
-static float last_temp=0;
-
 static size_t temp_to_char(char *str) {
 #if defined(CONFIG_BMX_ENABLE)
     ILOG(TAG, "[%s]", __func__);
@@ -203,35 +238,6 @@ static size_t temp_to_char(char *str) {
     return 0;
 }
 
-static const char *scr_fld[2][8][2] = {
-    {
-        {"Run", "Avg"},
-        {"Gate", "Ex"},
-        {"AlpR", "AlpM"},
-        {"NmR", "NmM"},
-        {"Dst", "500M"},
-        {"2sM", "10sM"},
-        {".5hR", ".5hM"},
-        {"1hR", "1hM"},
-    },
-    {
-        {"R", "A"},
-        {"G", "E"},
-        {"AlR", 0},
-        {"NmR", ""},
-        {0, 0},
-        {0, 0},
-        {0, 0},
-        {0, 0},
-    }
-};
-
-static const char * scr_fld_2[] = {
-    "-.--",
-    "0.00"
-};
-
-static int low_speed_seconds = 0;
 static esp_err_t speed_info_bar_update() {  // info bar when config->screen.speed_large_font is 1 or 0
     const logger_config_t *config = m_context.config;
     uint8_t field = m_context.config->screen.speed_field;          // default is in config.txt
@@ -461,11 +467,7 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->screen.spee
     return ESP_OK;
 }
 
-//static int low_speed_seconds = 0;
-static int16_t gps_image_angle = 0;
-static uint8_t last_hr=0, last_min=0;
-
-void statusbar_time_cb(lv_timer_t *timer) {
+static void statusbar_time_cb(lv_timer_t *timer) {
 #if defined(STATUS_PANEL_V1)
     ui_status_panel_t * statusbar = &ui_status_panel;
     if(!statusbar->parent) {
@@ -571,48 +573,6 @@ static void statusbar_bat_cb(lv_timer_t *timer) {
     }
 }
 
-// static bool sdblink = false;
-// static void statusbar_sdcard_cb(lv_timer_t *timer) {
-//     #if defined(STATUS_PANEL_V1)
-//     ui_status_panel_t * statusbar = &ui_status_panel;
-//     if(!statusbar->parent) {
-//         return;
-//     }
-// #else
-//     lv_statusbar_t * statusbar = (lv_statusbar_t *)ui_StatusPanel;
-// #endif
-//     char tmp[24], *p = tmp;
-//     lv_obj_t *panel;
-//     if ((panel = statusbar->sdcard_image)) {
-//         if (m_context.sdOK) {
-// #if defined(CONFIG_DISPLAY_DRIVER_ST7789)
-//             lv_obj_set_style_img_recolor(panel, lv_color_hex(0xA9B7B9), LV_PART_MAIN | LV_STATE_DEFAULT);
-//             lv_obj_set_style_img_recolor_opa(panel, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-// #endif
-//             if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
-//                 lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
-//             }
-//         } else {
-//             if (sdblink == 0) {
-//                 if (!lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
-//                     lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
-//                 }
-//                 sdblink = 1;
-//             } else {
-//                 if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
-//                     lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
-//                 }
-// #if defined(CONFIG_DISPLAY_DRIVER_ST7789)
-//                 lv_obj_set_style_img_recolor(panel, lv_color_hex(0xE32424), LV_PART_MAIN | LV_STATE_DEFAULT);
-//                 lv_obj_set_style_img_recolor_opa(panel, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-// #endif
-//                 sdblink = 0;
-//             }
-//         }
-//     }
-// }
-
-static uint8_t gblink = 0;
 static void statusbar_gps_cb(lv_timer_t *timer) {
 #if defined(STATUS_PANEL_V1)
     ui_status_panel_t * statusbar = &ui_status_panel;
@@ -698,20 +658,6 @@ static void statusbar_update() {
     // // gps/wifi image //
     statusbar_gps_cb(0);
 }
-
-typedef struct sat_count_s {
-    uint8_t gps;
-    uint8_t sbas;
-    uint8_t galileo;
-    uint8_t beidou;
-    uint8_t qzss;
-    uint8_t glonass;
-    uint8_t navic;
-} sat_count_t;
-
-sat_count_t sat_count = {0};
-char gps_status_str[32] = {0};
-char bat_status_str[32] = {0};
 
 static void update_sat_count() {
     struct nav_sat_s *nav_sat = &m_context.gps.ublox_config->ubx_msg.nav_sat;
@@ -801,10 +747,7 @@ static size_t update_gps_desc_row_str(char * p) {
     }
     return pb - p;
 }
-static int8_t offset_mark = 0;
-static uint8_t offset_mark_dir = 0;
-static uint32_t next_gps_str_update = 0;
-static uint16_t screen_mode_counter = 0;
+
 uint16_t get_offscreen_counter() {
     return old_screen_mode == SCREEN_MODE_SHUT_DOWN && count_flushed==count ? screen_mode_counter : 0;
 }

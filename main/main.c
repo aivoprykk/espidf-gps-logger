@@ -25,7 +25,6 @@
 #include "bmx.h"
 #include "button.h"
 #include "context.h"
-#include "display.h"
 #include "vfs_fat_sdspi.h"
 #ifdef CONFIG_USE_FATFS
 #include "vfs_fat_spiflash.h"
@@ -86,14 +85,11 @@ static struct logger_config_s * m_config = 0;
 // 1 - config, wifi and http running
 // 2 - run, gps running
 static app_mode_t app_mode = APP_MODE_UNKNOWN;
-static uint8_t prev_stage = 0;
 
-static TaskHandle_t t1=0;
-static TaskHandle_t t2=0;
-static TaskHandle_t t3=0;
+static TaskHandle_t gps_task_handle = 0;
+#if defined(USE_WDT)
 static int wdt_task0, wdt_task1;
-static float analog_mean = 2000;
-static bool g_master_log_level = ESP_LOG_INFO;
+#endif
 
 static struct display_s display;
 static esp_err_t events_uninit();
@@ -103,7 +99,6 @@ static cur_screens_t cur_screen = CUR_SCREEN_NONE;
 static cur_screens_t next_screen = CUR_SCREEN_NONE;
 static uint8_t app_mode_wifi_on = 0;
 static uint8_t app_mode_gps_on = 0;
-static bool button_down = false;
 static uint8_t stat_screen_count = 0;
 static uint32_t low_bat_countdown = 0;
 static uint8_t record_done = 255;
@@ -116,13 +111,11 @@ static char * wakeup_reasons[] = {
     "ESP_SLEEP_WAKEUP_ULP",
     "ESP_SLEEP_WAKEUP_OTHER",
 };
-static bool screen_from_wakeup = false;
 #if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
 static uint32_t seconds_before_sleep = 0;
 #endif
 static uint32_t last_flush_time = 0;
 static uint16_t ubx_fail_count = 0;
-static uint32_t ubx_msg_failed = 0;
 static uint8_t ubx_restart_requested = 0;
 
 #define L_FW_UPDATE_FIELDS 3
@@ -135,6 +128,7 @@ typedef enum cfg_screen_e {
 } cfg_screen_t ;
  // 200ms before exec cb
 #define BUTTON_CB_WAIT_BEFORE 210000
+static bool button_down = false;
 static int button_press_mode = -1;
 static uint8_t button_clicks = 0;
 static uint8_t gps_cfg_item = 0;
@@ -341,8 +335,8 @@ static int shut_down_gps(int no_sleep) {
         m_context_rtc.RTC_min = (tms.tm_min);    
     }
     uint32_t timeout = get_millis() + 5000; // wait for 3 seconds
-    if(t1) {
-        while(t1!=0 && timeout > get_millis()){
+    if(gps_task_handle) {
+        while(gps_task_handle!=0 && timeout > get_millis()){
             delay_ms(100);
         }
     }
@@ -657,7 +651,7 @@ static void gpsTask(void *parameter) {
     if(gps_periodic_timer)
         ESP_ERROR_CHECK(esp_timer_stop(gps_periodic_timer));
 #endif
-    t1 = 0;
+    gps_task_handle = 0;
     vTaskDelete(NULL);
 }
 
@@ -1260,25 +1254,6 @@ static void init_button() {
 #endif
 }
 
-// void wifiTask() {
-//     uint16_t delay = 500;
-//     uint32_t loops = 0;
-// #if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
-//     task_memory_info(__func__);
-// #endif
-//     while (app_mode == APP_MODE_WIFI) {
-// #if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
-//         if (loops++ > 100) {
-//             task_memory_info(__func__);
-//             loops = 0;
-//         }
-// #endif
-//         delay_ms(delay);
-//     }
-//     t3 = 0;
-//     vTaskDelete(NULL);
-// }
-
 void wifi_sta_conf_sync() {
     for(uint8_t i=0, j=5; i<j; ++i) {
         if(i>0 && !m_config->wifi_sta[i].ssid[0]) break;
@@ -1291,7 +1266,7 @@ void wifi_sta_conf_sync() {
 }
 
 void app_mode_wifi_handler(int verbose) {
-    if (t3 || app_mode_wifi_on) return;
+    if (app_mode_wifi_on) return;
     app_mode = APP_MODE_WIFI;
     app_mode_wifi_on = 1;
     if (!wifi_context.s_wifi_initialized) {
@@ -1304,17 +1279,11 @@ void app_mode_wifi_handler(int verbose) {
 #if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
     task_memory_info(__func__);
 #endif
-    // xTaskCreate(wifiTask,   /* Task function. */
-    //             "wifiTask", /* String with name of task. */
-    //             CONFIG_WIFI_TASK_STACK_SIZE,  /* Stack size in bytes. */
-    //             NULL,      /* Parameter passed as input of the task */
-    //             5,         /* Priority of the task. */
-    //             &t3);      /* Task handle. */
     ILOG(TAG, "[%s] wifi task started.", __FUNCTION__);
 }
 
 void app_mode_gps_handler(int verbose) {
-    if (t1 || app_mode_gps_on) return;
+    if (gps_task_handle || app_mode_gps_on) return;
     DMEAS_START();
     app_mode = APP_MODE_GPS;
     app_mode_gps_on = 1;
@@ -1332,7 +1301,7 @@ void app_mode_gps_handler(int verbose) {
                 CONFIG_GPS_LOG_STACK_SIZE,  /* Stack size in bytes. */
                 NULL,      /* Parameter passed as input of the task */
                 19,         /* Priority of the task. */
-                &t1, 1);      /* Task handle. */
+                &gps_task_handle, 1);      /* Task handle. */
     end:
     DMEAS_END(TAG, "[%s] took %llu us", __FUNCTION__);
 }
