@@ -92,7 +92,6 @@ static int wdt_task0, wdt_task1;
 #endif
 
 static struct display_s display;
-static esp_err_t events_uninit();
 static esp_timer_handle_t button_timer = 0;
 static esp_timer_handle_t sd_timer = 0;
 static cur_screens_t cur_screen = CUR_SCREEN_NONE;
@@ -346,7 +345,7 @@ static int shut_down_gps(int no_sleep) {
     }
     ubx_off(m_context.gps.ublox_config);
     m_context.gps.ublox_config->time_set = 0;
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
 #endif
     if (!no_sleep) {
@@ -588,15 +587,12 @@ static void gpsTask(void *parameter) {
     struct nav_pvt_s * nav_pvt = &ubxMessage->navPvt;
     uint8_t try_setup_times = 5;
     ILOG(TAG, "[%s]", __func__);
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
-    task_memory_info(__func__);
-#endif
 #if defined(GPS_TIMER_STATS)
     if(gps_periodic_timer)
         ESP_ERROR_CHECK(esp_timer_start_periodic(gps_periodic_timer, 1000000));
 #endif
     while (app_mode == APP_MODE_GPS) {
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2 || defined(DEBUG))
         if (loops++ > 100) {
             task_memory_info(__func__);
             loops = 0;
@@ -1135,7 +1131,7 @@ uint32_t screen_cb(void* arg) {
         }
     }
     end:
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
 #endif
     return delay;
@@ -1276,7 +1272,7 @@ void app_mode_wifi_handler(int verbose) {
         wifi_mode(1, 1);
         ILOG(TAG, "[%s] wifi started.", __FUNCTION__);
     }
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
 #endif
     ILOG(TAG, "[%s] wifi task started.", __FUNCTION__);
@@ -1293,7 +1289,7 @@ void app_mode_gps_handler(int verbose) {
     }
     if(!m_context.sdOK)
         goto end;
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
 #endif
     xTaskCreatePinnedToCore(gpsTask,   /* Task function. */
@@ -1543,6 +1539,9 @@ static void all_event_handler(void *handler_args, esp_event_base_t base, int32_t
                 break;
             case UI_EVENT_FLUSH_DONE:
                 ILOG(TAG, "[%s] %s", __FUNCTION__, ui_event_strings[id]);
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2 || defined(DEBUG))
+                task_memory_info(__func__);
+#endif
             default:
                 break;
         }
@@ -1728,9 +1727,6 @@ static void setup(void) {
 #else
     ESP_LOGW(TAG, "[%s] build debug mode not set.", __FUNCTION__);
 #endif
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
-    task_memory_info(__func__);
-#endif
     delay_ms(50);
 #if defined(GPS_TIMER_STATS)
     const esp_timer_create_args_t gps_periodic_timer_args = {
@@ -1779,11 +1775,10 @@ void app_main(void) {
             m_context.request_restart = 0;
         }
         if (loops++ >= 99) {
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
-            // task_top();
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2 || defined(DEBUG))
             memory_info_large(__func__);
             task_memory_info(__func__);
-#endif      
+#endif
             loops=0;
             verbose = 1;
         } else {
