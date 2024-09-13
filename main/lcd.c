@@ -4,7 +4,7 @@
 #include <esp_log.h>
 #include <adc.h>
 
-#include "display.h"
+#include "lcd.h"
 #include "private.h"
 #include "driver_vendor.h"
 
@@ -240,10 +240,11 @@ static size_t temp_to_char(char *str) {
 
 static esp_err_t speed_info_bar_update() {  // info bar when config->screen.speed_large_font is 1 or 0
     const logger_config_t *config = m_context.config;
-    uint8_t field = m_context.config->screen.speed_field;          // default is in config.txt
+    if(!config) return ESP_ERR_INVALID_STATE;
+    uint8_t field = config->screen.speed_field;          // default is in config.txt
     uint8_t bar_max = 240;                                  // 240 pixels is volledige bar
     uint16_t bar_length = config->gps.bar_length * 1000 / bar_max;  // default 100% length = 1852 m
-    uint8_t font_size = m_context.config->screen.speed_large_font;
+    uint8_t font_size = config->screen.speed_large_font;
 
     if (config->screen.speed_field == 1) {  // only switch if config.field==1 !!!
         if (((int)(m_context.gps.Ublox.total_distance / 1000000) % 10 == 0) && (m_context.gps.Ublox.alfa_distance / 1000 > 1000))
@@ -585,7 +586,7 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
     lv_obj_t *panel;
     if ((panel = statusbar->gps_image)) {
         char tmp[24]={0}, *p = tmp;
-        if ((m_context.gps.ublox_config->is_on)) {
+        if (m_context.gps.ublox_config && m_context.gps.ublox_config->is_on) {
             if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
                 lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
             }
@@ -596,7 +597,7 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
             return;
         }
         //if(statusbar->viewmode==2) { 
-            if (!m_context.gps.ublox_config->ready){
+            if (!!m_context.gps.ublox_config || !m_context.gps.ublox_config->ready){
                 memcpy(p, "-n-", 3);
             }
             // else if(!m_context.gps.ublox_config->signal_ok) {
@@ -660,6 +661,7 @@ static void statusbar_update() {
 }
 
 static void update_sat_count() {
+    if(!m_context.gps.ublox_config) return;
     struct nav_sat_s *nav_sat = &m_context.gps.ublox_config->ubx_msg.nav_sat;
     const struct svs_nav_sat_s * sat = 0;
     memset(&sat_count, 0, sizeof(sat_count_t));
@@ -700,6 +702,7 @@ static void update_sat_count() {
 }
 
 static size_t update_gps_info_row_str(char * p) {
+    if(!m_context.gps.ublox_config) return 0;
     update_sat_count();
     char * pc = p;
     uint8_t gnss = m_context.gps.ublox_config->rtc_conf->gnss;
@@ -736,6 +739,8 @@ static size_t update_gps_desc_row_str(char * p) {
     memcpy(pb, "Bat: ", 5), pb += 5;
     pb += f3_to_char(m_context_rtc.RTC_voltage_bat, pb);
     memcpy(pb, "V ", 2), pb += 2;
+    if(!m_context.gps.ublox_config) 
+        goto end;
     if(m_context.gps.ublox_config->first_fix){
         memcpy(pb, " fx: ", 5), pb += 5;
         pb += xultoa(m_context.gps.ublox_config->first_fix, pb);
@@ -745,6 +750,7 @@ static size_t update_gps_desc_row_str(char * p) {
         memcpy(pb, " lst: ", 6), pb += 6;
         pb += xultoa(m_context.gps.lost_frames, pb), *pb=0;
     }
+    end:
     return pb - p;
 }
 
@@ -787,11 +793,16 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 break;
             case SCREEN_MODE_GPS_INIT:
             case SCREEN_MODE_GPS_READY:
-                gps = ubx_chip_str(m_context.gps.ublox_config);
-                if(!strcmp(gps, "UNKNOWN")) {
+                gps = m_context.gps.ublox_config ? ubx_chip_str(m_context.gps.ublox_config) : 0;
+                if(!gps) {
                     p=str;
                     img_src = &near_me_disabled_bold_48px;
-                    memcpy(&str[0], "GPS -", 5), p += 5;
+                    memcpy(p, "NO GPS YET", 6), p += 6;
+                }
+                else if(!strcmp(gps, "UNKNOWN")) {
+                    p=str;
+                    img_src = &near_me_disabled_bold_48px;
+                    memcpy(p, "GPS -", 5), p += 5;
                 }
                 else {
                     p += strlen(gps);
@@ -887,7 +898,7 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
             case SCREEN_MODE_SPEED_1:
             link_for_screen_mode_speed_2:
                 gpsspd = gps_last_speed_smoothed(2) * m_context_rtc.RTC_calibration_speed;
-                if (!m_context.gps.ublox_config->ready || !m_context.gps.ublox_config->signal_ok) {
+                if (!m_context.gps.ublox_config || !m_context.gps.ublox_config->ready || !m_context.gps.ublox_config->signal_ok) {
                     memcpy(p, "-.--", 4);
                     *(p+4) = 0;
                 }

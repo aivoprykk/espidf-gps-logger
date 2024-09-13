@@ -48,7 +48,7 @@
 #include "driver_vendor.h"
 
 #include "dstat_screens.h"
-#include "display.h"
+#include "lcd.h"
 
 // events
 #include "adc_events.h"
@@ -85,6 +85,9 @@ static struct logger_config_s * m_config = 0;
 // 1 - config, wifi and http running
 // 2 - run, gps running
 static app_mode_t app_mode = APP_MODE_UNKNOWN;
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
+static const char * const app_mode_str[] = { APP_MODE_LIST(STRINGIFY) };
+#endif
 
 static TaskHandle_t gps_task_handle = 0;
 #if defined(USE_WDT)
@@ -96,12 +99,15 @@ static esp_timer_handle_t button_timer = 0;
 static esp_timer_handle_t sd_timer = 0;
 static cur_screens_t cur_screen = CUR_SCREEN_NONE;
 static cur_screens_t next_screen = CUR_SCREEN_NONE;
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
+static const char * const cur_screen_str[] = { CUR_SCREEN_LIST(STRINGIFY) };
+#endif
 static uint8_t app_mode_wifi_on = 0;
 static uint8_t app_mode_gps_on = 0;
 static uint8_t stat_screen_count = 0;
 static uint32_t low_bat_countdown = 0;
 static uint8_t record_done = 255;
-static char * wakeup_reasons[] = {
+static const char * const wakeup_reasons[] = {
     0, 0,
     "ESP_SLEEP_WAKEUP_EXT0",
     "ESP_SLEEP_WAKEUP_EXT1",
@@ -118,13 +124,8 @@ static uint16_t ubx_fail_count = 0;
 static uint8_t ubx_restart_requested = 0;
 
 #define L_FW_UPDATE_FIELDS 3
-#define L_CFG_SCREEN_FIELDS 4
-typedef enum cfg_screen_e {
-    CFG_SCREEN_GPS = 0x00,
-    CFG_SCREEN_STAT_SCREEN = 0x01,
-    CFG_SCREEN_SCREEN = 0x02,
-    CFG_SCREEN_FW_UPDATE = 0x03
-} cfg_screen_t ;
+#define L_CFG_GROUP_FIELDS 4
+
  // 200ms before exec cb
 #define BUTTON_CB_WAIT_BEFORE 210000
 static bool button_down = false;
@@ -266,7 +267,13 @@ static void go_to_sleep(uint64_t sleep_time) {
     }
     wait_for_ui_task();
     write_rtc(&m_context_rtc);
-    sdcard_umount();
+    if (esp_timer_is_active(sd_timer)) {
+            esp_timer_stop(sd_timer);
+            esp_timer_delete(sd_timer);
+    }
+    if(sdcard_is_mounted()) {
+        sdcard_umount();
+    }
     sdcard_uninit();
 #ifdef CONFIG_USE_FATFS
     fatfs_uninit();
@@ -285,9 +292,11 @@ static void go_to_sleep(uint64_t sleep_time) {
 }
 
 static int shut_down_gps(int no_sleep) {
-    if (!m_context.gps.ublox_config->uart_setup_ok && no_sleep) 
-        return 0;
     ILOG(TAG, "[%s]", __func__); 
+    if ((!m_context.gps.ublox_config || !m_context.gps.ublox_config->uart_setup_ok) && no_sleep) 
+        return 0;
+    if(!m_context.gps.ublox_config)
+        goto end;
     int ret = 0;
     if(m_context.gps.ublox_config->time_set)
             next_screen = CUR_SCREEN_SAVE_SESSION;
@@ -348,6 +357,7 @@ static int shut_down_gps(int no_sleep) {
 #if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
 #endif
+    end:
     if (!no_sleep) {
         go_to_sleep(3);  // got to sleep after 5 s, this to prevent booting when
         // GPIO39 is still low !
@@ -654,7 +664,7 @@ static void gpsTask(void *parameter) {
 static void button_timer_cb(void *arg) {
     ILOG(TAG, "[%s]", __func__);
     if(button_clicks == 1) {
-        ILOG(TAG, "[%s] Button single click arrived.", __func__);
+        ILOG(TAG, "[%s] Button single click arrived, %s.", __func__, button_press_mode == 3 ? "lllong" : button_press_mode == 2 ? "llong" : button_press_mode == 1 ? "long" : "short");
         uint8_t flush_times = 1;
         int8_t fast_refr_time = -1;
         if(button_press_mode==3) { // long long long press
@@ -676,7 +686,7 @@ static void button_timer_cb(void *arg) {
         else if (button_press_mode==1) { // long press
             if (next_screen == CUR_SCREEN_SETTINGS){
                 ILOG(TAG, "[%s] settings new screen requested %d", __func__, 1);
-                    if(cfg_screen >= L_CFG_SCREEN_FIELDS-1)
+                    if(cfg_screen >= L_CFG_GROUP_FIELDS-1)
                         cfg_screen = 0;
                     else
                         ++cfg_screen;
@@ -705,19 +715,19 @@ static void button_timer_cb(void *arg) {
             }
             else if(cur_screen == CUR_SCREEN_SETTINGS) {
                 ILOG(TAG, "[%s] settings next requested %d", __func__, 1);
-                if(cfg_screen == CFG_SCREEN_GPS) {
+                if(cfg_screen == CFG_GROUP_GPS) {
                     if(++gps_cfg_item >= L_CONFIG_GPS_FIELDS)
                         gps_cfg_item = 0;
                 }
-                else if(cfg_screen == CFG_SCREEN_STAT_SCREEN) {
+                else if(cfg_screen == CFG_GROUP_STAT_SCREENS) {
                     if(++stat_screen_cfg_item >= L_CONFIG_STAT_FIELDS)
                         stat_screen_cfg_item = 0;
                 }
-                else if(cfg_screen == CFG_SCREEN_SCREEN) {
+                else if(cfg_screen == CFG_GROUP_SCREEN) {
                     if(++screen_cfg_item >= L_CONFIG_SCREEN_FIELDS)
                         screen_cfg_item = 0;
                 }
-                else if(cfg_screen == CFG_SCREEN_FW_UPDATE) {
+                else if(cfg_screen == CFG_GROUP_FW) {
                     if(++fw_cfg_item >= 2)
                         fw_cfg_item = 0;
                 }
@@ -744,10 +754,7 @@ static void button_timer_cb(void *arg) {
         }
     }
     else if(button_clicks==2) {
-        ILOG(TAG, "[%s] Button double click arrived.", __func__);
-        if (button_press_mode==1) {
-            ILOG(TAG, "[%s] double long click requested", __func__);
-        }
+        ILOG(TAG, "[%s] Button double click arrived, %s", __func__, button_press_mode == 3 ? "lllong" : button_press_mode == 2 ? "llong" : button_press_mode == 1 ? "long" : "short");
         if (app_mode == APP_MODE_GPS) {
             if(next_screen == CUR_SCREEN_GPS_INFO || cur_screen == CUR_SCREEN_GPS_INFO) {
                 ILOG(TAG, "[%s] setting screen requested", __func__);
@@ -788,7 +795,7 @@ static void button_timer_cb(void *arg) {
             lcd_ui_request_full_refresh(0);
     }
     else {
-        ILOG(TAG, "[%s] Button triple click arrived.", __func__);
+        ILOG(TAG, "[%s] Button triple click arrived, %s", __func__, button_press_mode == 3 ? "lllong" : button_press_mode == 2 ? "llong" : button_press_mode == 1 ? "long" : "short");
         if(!(app_mode == APP_MODE_GPS && next_screen == CUR_SCREEN_SETTINGS)) {
             ILOG(TAG, "[%s] screen rotation change requested", __func__);
             if(set_screen_cfg_item(m_config, 6, m_context.gps.ublox_config->rtc_conf->hw_type)) {
@@ -801,7 +808,7 @@ static void button_timer_cb(void *arg) {
             if(next_screen==CUR_SCREEN_SETTINGS) {
                 ubx_hw_t hw_type = m_context.gps.ublox_config->rtc_conf->hw_type;
                 ILOG(TAG, "[%s] settings screen change requested", __func__);
-                if(cfg_screen == CFG_SCREEN_GPS) {
+                if(cfg_screen == CFG_GROUP_GPS) {
                     if(set_gps_cfg_item(m_config, gps_cfg_item, hw_type)) {
                         ILOG(TAG, "[%s] settings screen change requested", __func__);
                         g_context_ubx_add_config(&m_context, m_context.gps.ublox_config);
@@ -809,20 +816,20 @@ static void button_timer_cb(void *arg) {
                         ubx_restart_requested = 1;
                     }
                 }
-                else if(cfg_screen == CFG_SCREEN_STAT_SCREEN) {
+                else if(cfg_screen == CFG_GROUP_STAT_SCREENS) {
                     if(set_stat_screen_cfg_item(m_config, stat_screen_cfg_item, hw_type)) {
                         ILOG(TAG, "[%s] settings screen change requested", __func__);
                         g_context_add_config(&m_context, m_context.config);
                     }
                 }
-                else if(cfg_screen == CFG_SCREEN_SCREEN) {
+                else if(cfg_screen == CFG_GROUP_SCREEN) {
                     if(set_screen_cfg_item(m_config, screen_cfg_item, hw_type)) {
                         ILOG(TAG, "[%s] settings screen change requested", __func__);
                         g_context_rtc_add_config(&m_context_rtc, m_context.config);
                         display_set_rotation(m_context_rtc.RTC_screen_rotation);
                     }
                 }
-                else if(cfg_screen == CFG_SCREEN_FW_UPDATE) {
+                else if(cfg_screen == CFG_GROUP_FW) {
                     if(set_fw_update_cfg_item(m_config, fw_cfg_item, hw_type)) {
                         ILOG(TAG, "[%s] settings fw change requested", __func__);
                         // g_context_add_config(&m_context, m_context.config);
@@ -845,7 +852,7 @@ static void button_timer_cb(void *arg) {
 static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
     uint32_t tm = time/1000;
     l_button_t *btn = 0;
-    ILOG(TAG, "[%s]", __func__);
+    ILOG(TAG, "[%s] num: %d event: %s", __func__, ev, l_button_ev_list[ev]);
     //ESP_LOGI(TAG, "Button %d event: %d, time: %ld ms", num, ev, tm);
     switch (ev) {
     case L_BUTTON_UP:
@@ -876,7 +883,7 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
         break;
     case L_BUTTON_DOWN:
         if(esp_timer_is_active(button_timer)){
-            ILOG(TAG,"[%s] cancel timer %d", __FUNCTION__, num);
+            ILOG(TAG,"[%s] cancel timer, num: %d", __FUNCTION__, num);
             esp_timer_stop(button_timer);
         }
         button_down = true;
@@ -892,7 +899,7 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
     case L_BUTTON_LONG_LONG_PRESS_START:
         if(num==0 && tm >= 9700) {
             button_press_mode = 3;
-            ILOG(TAG, "[%s] Button %d 3xlong press detected, time: %lld, restart requested.", __func__, num, time);
+            ILOG(TAG, "[%s] Button num: %d lllong press detected, time: %lld, restart requested.", __func__, num, time);
             m_context.request_restart = true;
             break;
         }
@@ -914,7 +921,8 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
 
 #define LOW_BAT_TRIGGER 7
 uint32_t screen_cb(void* arg) {
-    ILOG(TAG, "[%s] %ld app_mode: %d, cur_screen: %d, next_screen: %d, count_failed: %hu", __func__, get_lcd_ui_count(), app_mode, cur_screen, next_screen, ubx_fail_count);
+    const uint32_t lcd_count = get_lcd_ui_count();
+    ILOG(TAG, "[%s] %ld app_mode: %s, cur_screen: %s, next_screen: %s, count_failed: %hu", __func__, lcd_count, app_mode_str[app_mode], cur_screen_str[cur_screen], cur_screen_str[next_screen], ubx_fail_count);
     struct display_s *dspl = &display;
     uint32_t delay=0;
     if(!dspl || !dspl->op) {
@@ -993,13 +1001,7 @@ uint32_t screen_cb(void* arg) {
         delay = op->update_screen(dspl, SCREEN_MODE_SHUT_DOWN, 0);
         goto end;
     }
-    if (get_lcd_ui_count()<2 || app_mode == APP_MODE_BOOT) {
-        // bootscreen:
-        delay = op->update_screen(dspl, SCREEN_MODE_BOOT, 0);
-        cur_screen = CUR_SCREEN_BOOT;
-        goto end;
-    }
-    if(cur_screen!= CUR_SCREEN_BOOT){
+    if(lcd_count > 1){
         if(m_context.low_bat_count>=LOW_BAT_TRIGGER) {
             delay=op->update_screen(dspl, SCREEN_MODE_LOW_BAT, 0);
             goto end;
@@ -1009,22 +1011,27 @@ uint32_t screen_cb(void* arg) {
             goto end;
         }
     }
+    if (lcd_count < 2 || app_mode == APP_MODE_BOOT) {
+        delay = op->update_screen(dspl, SCREEN_MODE_BOOT, 0);
+        cur_screen = CUR_SCREEN_BOOT;
+        goto end;
+    }
     
     if (next_screen == CUR_SCREEN_SETTINGS) {
         logger_config_item_t item = {0};
-        if(cfg_screen == CFG_SCREEN_GPS) {
+        if(cfg_screen == CFG_GROUP_GPS) {
             get_gps_cfg_item(m_config, gps_cfg_item, &item);
             const v_settings_t s = { CFG_GROUP_GPS, "GPS", &item };
             delay = op->update_screen(dspl, SCREEN_MODE_SETTINGS, (void*)&s);
-        } else if(cfg_screen == CFG_SCREEN_STAT_SCREEN) {
+        } else if(cfg_screen == CFG_GROUP_STAT_SCREENS) {
             get_stat_screen_cfg_item(m_config, stat_screen_cfg_item, &item);
             const v_settings_t s = { CFG_GROUP_STAT_SCREENS, "Stat Screens", &item };
             delay = op->update_screen(dspl, SCREEN_MODE_SETTINGS, (void*)&s);
-        } else if(cfg_screen == CFG_SCREEN_SCREEN) {
+        } else if(cfg_screen == CFG_GROUP_SCREEN) {
             get_screen_cfg_item(m_config, screen_cfg_item, &item);
             const v_settings_t s = { CFG_GROUP_SCREEN, "Display", &item };
             delay = op->update_screen(dspl, SCREEN_MODE_SETTINGS, (void*)&s);
-        } else if(cfg_screen == CFG_SCREEN_FW_UPDATE) {
+        } else if(cfg_screen == CFG_GROUP_FW) {
             get_fw_update_cfg_item(m_config, fw_cfg_item, &item);
             const v_settings_t s = { CFG_GROUP_FW, "FW Update", &item };
             delay = op->update_screen(dspl, SCREEN_MODE_SETTINGS, (void*)&s);
@@ -1051,7 +1058,7 @@ uint32_t screen_cb(void* arg) {
             gpstrblscr:
             delay=op->update_screen(dspl, SCREEN_MODE_GPS_TROUBLE, 0);  // gps signal lost !!!
             cur_screen = CUR_SCREEN_GPS_TROUBLE;
-        } else if ((next_screen != CUR_SCREEN_GPS_STATS && m_context.gps.ublox_config && (!m_context.gps.ublox_config->ready || (m_context.gps.ublox_config->ready && !m_context.gps.ublox_config->ubx_msg.mon_ver.hwVersion[0]))) || (!run_is_active && next_screen == CUR_SCREEN_GPS_INFO)) {
+        } else if ((next_screen != CUR_SCREEN_GPS_STATS && (!m_context.gps.ublox_config || !m_context.gps.ublox_config->ready || (m_context.gps.ublox_config->ready && !m_context.gps.ublox_config->ubx_msg.mon_ver.hwVersion[0]))) || (!run_is_active && next_screen == CUR_SCREEN_GPS_INFO)) {
             // if(!m_context.gps.ublox_config->ubx_msg.mon_ver.hwVersion[0]) goto bootscreen;
             delay=op->update_screen(dspl, SCREEN_MODE_GPS_INIT, 0);
             cur_screen = CUR_SCREEN_GPS_INFO;
@@ -1116,7 +1123,7 @@ uint32_t screen_cb(void* arg) {
             delay=op->update_screen(dspl, m_context.stat_screen_cur+1, 0);
             cur_screen = CUR_SCREEN_GPS_STATS;
         } else {
-            if(!m_context.gps.ublox_config->ubx_msg.mon_ver.hwVersion[0] && m_context.gps.ublox_config->ready) goto gpstrblscr;
+            if(m_context.gps.ublox_config && !m_context.gps.ublox_config->ubx_msg.mon_ver.hwVersion[0] && m_context.gps.ublox_config->ready) goto gpstrblscr;
             if (m_config && m_config->screen.speed_large_font == 2) {
                     delay=op->update_screen(dspl, SCREEN_MODE_SPEED_2, 0);
             } else {
@@ -1251,6 +1258,7 @@ static void init_button() {
 }
 
 void wifi_sta_conf_sync() {
+    ILOG(TAG, "[%s]", __func__);
     for(uint8_t i=0, j=5; i<j; ++i) {
         if(i>0 && !m_config->wifi_sta[i].ssid[0]) break;
         if (strcmp(wifi_context.stas[i].ssid, m_config->wifi_sta[i].ssid)) {
@@ -1263,8 +1271,10 @@ void wifi_sta_conf_sync() {
 
 void app_mode_wifi_handler(int verbose) {
     if (app_mode_wifi_on) return;
+    ILOG(TAG, "[%s]", __func__);
     app_mode = APP_MODE_WIFI;
     app_mode_wifi_on = 1;
+    shut_down_gps(1);
     if (!wifi_context.s_wifi_initialized) {
         ILOG(TAG, "[%s] first turn wifi on", __FUNCTION__);
         wifi_sta_conf_sync();
@@ -1275,7 +1285,6 @@ void app_mode_wifi_handler(int verbose) {
 #if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
 #endif
-    ILOG(TAG, "[%s] wifi task started.", __FUNCTION__);
 }
 
 void app_mode_gps_handler(int verbose) {
@@ -1289,9 +1298,6 @@ void app_mode_gps_handler(int verbose) {
     }
     if(!m_context.sdOK)
         goto end;
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2 || defined(DEBUG))
-    task_memory_info(__func__);
-#endif
     xTaskCreatePinnedToCore(gpsTask,   /* Task function. */
                 "gpsTask", /* String with name of task. */
                 CONFIG_GPS_LOG_STACK_SIZE,  /* Stack size in bytes. */
@@ -1299,6 +1305,9 @@ void app_mode_gps_handler(int verbose) {
                 19,         /* Priority of the task. */
                 &gps_task_handle, 1);      /* Task handle. */
     end:
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2 || defined(DEBUG))
+    task_memory_info(__func__);
+#endif
     DMEAS_END(TAG, "[%s] took %llu us", __FUNCTION__);
 }
 
@@ -1319,7 +1328,6 @@ void task_app_mode_handler(int verbose) {
         case APP_MODE_WIFI:
             app_mode_gps_on = 0;
             // next_screen = CUR_SCREEN_NONE;
-            shut_down_gps(1);
             app_mode_wifi_handler(verbose);
             break;
         case APP_MODE_GPS:
@@ -1708,7 +1716,7 @@ static void setup(void) {
     if(!sdcard_init())
         sd_mount_cb(NULL);
     if(!m_context_rtc.RTC_screen_auto_refresh){
-       lcd_ui_task_resume_for_times(2, 0, 1, true);
+       lcd_ui_task_resume_for_times(3, 0, 1, true);
     }
     // appstage 1, structures initialized, start gps.
     delay_ms(50);
