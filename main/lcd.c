@@ -703,12 +703,14 @@ static void update_sat_count() {
 
 static size_t update_gps_info_row_str(char * p) {
     if(!m_context.gps.ublox_config) return 0;
-    update_sat_count();
     char * pc = p;
-    uint8_t gnss = m_context.gps.ublox_config->rtc_conf->gnss;
-    pc += xultoa(m_context.gps.ublox_config->ubx_msg.navPvt.numSV, pc);
-    memcpy(pc, "sat", 3), pc += 3;
-    if(m_context.gps.ublox_config->ready) {
+    if(!m_context.gps.ublox_config->config_progress) {
+        memcpy(pc, "initializing", 12), pc += 12;
+    } else if(m_context.gps.ublox_config->ready) {
+        update_sat_count();
+        uint8_t gnss = m_context.gps.ublox_config->rtc_conf->gnss;
+        pc += xultoa(m_context.gps.ublox_config->ubx_msg.navPvt.numSV, pc);
+        memcpy(pc, "sat", 3), pc += 3;
         if((gnss & (1 << 0))!=0) {
             *pc++ = ' ';
             *pc++ = 'G';
@@ -729,6 +731,9 @@ static size_t update_gps_info_row_str(char * p) {
             *pc++ = 'R';
             pc += xultoa(sat_count.glonass, pc);
         }
+    }
+    else {
+        memcpy(pc, "gps not ready", 13), pc += 13;
     }
     *pc = 0;
     return pc - p;

@@ -85,6 +85,7 @@ static struct logger_config_s * m_config = 0;
 // 1 - config, wifi and http running
 // 2 - run, gps running
 static app_mode_t app_mode = APP_MODE_UNKNOWN;
+static uint8_t config_initialized = 0;
 #if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
 static const char * const app_mode_str[] = { APP_MODE_LIST(STRINGIFY) };
 #endif
@@ -626,8 +627,10 @@ static void gpsTask(void *parameter) {
                 goto loop_tail;
             }
             if(ubx_fail_count>50) {
-                if(!ubxMessage->mon_ver.hwVersion[0]) // only when no hwVersion is received
+                if(!ubxMessage->mon_ver.hwVersion[0]) { // only when no hwVersion is received
                     m_context.request_restart = true;
+                    ILOG(TAG, "[%s] Gps init failed, restart requested.", __FUNCTION__);
+                }
                 else
                     ubx_fail_count = 0;
             }
@@ -1291,13 +1294,14 @@ void app_mode_gps_handler(int verbose) {
     if (gps_task_handle || app_mode_gps_on) return;
     DMEAS_START();
     app_mode = APP_MODE_GPS;
-    app_mode_gps_on = 1;
     if (wifi_context.s_wifi_initialized) {
         wifi_uninit();
         m_context.NTP_time_set = 0;
     }
-    if(!m_context.sdOK)
+    if(!config_initialized) {
         goto end;
+    }
+    app_mode_gps_on = 1;
     xTaskCreatePinnedToCore(gpsTask,   /* Task function. */
                 "gpsTask", /* String with name of task. */
                 CONFIG_GPS_LOG_STACK_SIZE,  /* Stack size in bytes. */
@@ -1603,6 +1607,9 @@ static void config_changed_cb(const char *key) {
 }
 
 static void ctx_load_cb() {
+    ILOG(TAG, "[%s]", __FUNCTION__);
+    m_context.freeSpace = sdcard_space();
+    ESP_LOGI(TAG, "[%s] sdcard mounted.", __FUNCTION__);
     m_config = config_new();
     m_config->config_changed_screen_cb = config_changed_cb;
     g_context_defaults(&m_context);
@@ -1610,36 +1617,27 @@ static void ctx_load_cb() {
     if (!m_context.gps.Gps_fields_OK)
         init_gps_context_fields(&m_context.gps);
     delay_ms(50);
+
+    config_load_json(m_config);
+    if(m_config->screen.screen_rotation != m_context_rtc.RTC_screen_rotation) {
+        ILOG(TAG, "[%s] screen rotation change (rtc) %d to (conf) %d", __FUNCTION__, m_context_rtc.RTC_screen_rotation, m_config->screen.screen_rotation);
+    }
+    g_context_rtc_add_config(&m_context_rtc, m_config);
+    display_set_rotation(m_context_rtc.RTC_screen_rotation);
+    g_context_add_config(&m_context, m_config);
+    config_fix_values(m_config);
+    g_context_ubx_add_config(&m_context, 0);
+    log_config_add_config(m_context.gps.log_config, m_config);
+    config_initialized = 1;
+    if(!m_context_rtc.RTC_screen_auto_refresh){
+       lcd_ui_task_resume_for_times(1, -1, -1, false);
+    }
 }
 
 static void sd_mount_cb(void* arg) {
     if(!sdcard_is_mounted()) {
         if(sdcard_mount()==ESP_OK) {
-            ctx_load_cb();
-
             m_context.sdOK = true;
-            m_context.freeSpace = sdcard_space();
-            ESP_LOGI(TAG, "[%s] sdcard mounted.", __FUNCTION__);
-
-            config_load_json(m_config);
-            if(m_config->screen.screen_rotation != m_context_rtc.RTC_screen_rotation) {
-                ILOG(TAG, "[%s] screen rotation change (rtc) %d to (conf) %d", __FUNCTION__, m_context_rtc.RTC_screen_rotation, m_config->screen.screen_rotation);
-            }
-            g_context_rtc_add_config(&m_context_rtc, m_config);
-            display_set_rotation(m_context_rtc.RTC_screen_rotation);
-            g_context_add_config(&m_context, m_config);
-            config_fix_values(m_config);
-            g_context_ubx_add_config(&m_context, 0);
-            log_config_add_config(m_context.gps.log_config, m_config);
-            /* strbf_t sbc;
-            strbf_init(&sbc);
-            config_encode_json(&sbc);
-            printf("conf:%s, size:%d", strbf_finish(&sbc), sbc.cur-sbc.start);
-            strbf_reset(&sbc);
-            config_get_json(&sbc, 0);
-            printf("conf:%s, size:%d", strbf_finish(&sbc), sbc.cur-sbc.start);
-            strbf_free(&sbc);
-            */
         }
         else if (!esp_timer_is_active(sd_timer)) {
             const esp_timer_create_args_t sd_timer_args = {
@@ -1781,6 +1779,10 @@ void app_main(void) {
             }
             m_context.request_shutdown = 0;
             m_context.request_restart = 0;
+        }
+        if(!m_config && m_context.sdOK) {
+            ILOG(TAG, "[%s] config not loaded, do it as sdcard is initialized.", __FUNCTION__);
+            ctx_load_cb();
         }
         if (loops++ >= 99) {
 #if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2 || defined(DEBUG))
