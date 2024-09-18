@@ -1008,7 +1008,7 @@ uint32_t screen_cb(void* arg) {
         op->sleep_screen(dspl, 0);
         goto end;
     }
-    if (app_mode == APP_MODE_SHUT_DOWN || app_mode == APP_MODE_RESTART) {
+    if (app_mode == APP_MODE_SHUT_DOWN || app_mode == APP_MODE_RESTART || m_context.request_shutdown || m_context.request_restart) {
         delay = op->update_screen(dspl, SCREEN_MODE_SHUT_DOWN, 0);
         goto end;
     }
