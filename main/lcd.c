@@ -242,24 +242,27 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->screen.spee
     const logger_config_t *config = m_context.config;
     if(!config) return ESP_ERR_INVALID_STATE;
     uint8_t field = config->screen.speed_field;          // default is in config.txt
-    uint8_t bar_max = 240;                                  // 240 pixels is volledige bar
+    const uint8_t bar_max = 240;                                  // 240 pixels is volledige bar
     uint16_t bar_length = config->gps.bar_length * 1000 / bar_max;  // default 100% length = 1852 m
-    uint8_t font_size = config->screen.speed_large_font;
+    const uint8_t font_size = config->screen.speed_large_font;
+    struct gps_context_s *gps = &m_context.gps;
+    const struct gps_data_s * gps_data = &gps->Ublox;
+    const struct ubx_config_s * ubx = gps->ublox_config;
 
     if (config->screen.speed_field == 1) {  // only switch if config.field==1 !!!
-        if (((int)(m_context.gps.Ublox.total_distance / 1000000) % 10 == 0) && (m_context.gps.Ublox.alfa_distance / 1000 > 1000))
+        if (((int)(gps_data->total_distance / 1000000) % 10 == 0) && (gps_data->alfa_distance / 1000 > 1000))
             field = 5;  // indien x*10km, totale afstand laten zien
-        // if(m_context.gps.S10.s_max_speed<(m_context.gps.S10.display_speed[5]*0.95))
+        // if(gps->S10.s_max_speed<(gps->S10.display_speed[5]*0.95))
         //     field=8;//if run slower dan 95% of slowest run, show 1h result
-        if ((m_context.gps.Ublox.alfa_distance / 1000 < 350) && (m_context.gps.alfa_window < 100))
+        if ((gps_data->alfa_distance / 1000 < 350) && (gps->alfa_window < 100))
             field = 3;  // first 350 m after gibe  alfa screen !!
-        if (m_context.gps.Ublox.alfa_distance / 1000 > config->gps.bar_length)
+        if (gps_data->alfa_distance / 1000 > config->gps.bar_length)
             field = 4;  // run longer dan 1852 m, NM scherm !!
     } else if (config->screen.speed_field == 2) { // show Nautical Mile status
-        if (m_context.gps.Ublox.run_distance / 1000 > config->gps.bar_length)
+        if (gps_data->run_distance / 1000 > config->gps.bar_length)
             field = 4;  // if run longer dan 1852 m, NM scherm !!
     } else if (config->screen.speed_field == 7) { // show alpha status
-        if ((m_context.gps.Ublox.alfa_distance / 1000 < 350) && (m_context.gps.alfa_window < 100))
+        if ((gps_data->alfa_distance / 1000 < 350) && (gps->alfa_window < 100))
             field = 3;  // first 350 m after gibe  alfa screen !!
         else
             field = 7;
@@ -267,23 +270,23 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->screen.spee
         field = 8;
     } else if (config->screen.speed_field == 9) {  // 1 hour default, but first alfa, and if good run, last run
         field = 8;
-        if (m_context.gps.Ublox.alfa_distance / 1000 > config->gps.bar_length)
+        if (gps_data->alfa_distance / 1000 > config->gps.bar_length)
             field = 4;  // run longer dan 1852 m, NM scherm !!
-        if (m_context.gps.S10.s_max_speed > m_context.gps.S10.display_speed[5])
+        if (gps->S10.s_max_speed > gps->S10.display_speed[5])
             field = 1;  // if run faster then slowest run, show AVG & run
-        if ((m_context.gps.Ublox.alfa_distance / 1000 < 350) && (m_context.gps.alfa_window < 100))
+        if ((gps_data->alfa_distance / 1000 < 350) && (gps->alfa_window < 100))
             field = 3;  // first 350 m after gibe  alfa screen !!
     }
 
     float s[] = {0, 0};
     const char *var[] = {0, 0};
     char val[][24] = {{0}, {0}}, *p;
-    if (!m_context.gps.ublox_config->ready || !m_context.gps.ublox_config->signal_ok) {
+    if (!ubx->ready || !ubx->signal_ok) {
         memcpy(val[0], scr_fld_2[0], 4);
         memcpy(val[1], scr_fld_2[0], 4);
         goto topoint;
     }
-    if(m_context.gps.S2.avg_s < 1000) { // 1ms = 3.6km/h
+    if(gps->S2.avg_s < 1000) { // 1ms = 3.6km/h
         memcpy(val[0], scr_fld_2[1], 4);
         memcpy(val[1], scr_fld_2[1], 4);
         goto topoint;
@@ -317,13 +320,13 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->screen.spee
 
     else if ((field == 3 || display_priv.test_field == 3)) {
         bar_length = 250 * 1000 / bar_max;  // full bar length with Alfa = 250 meter
-        if ((m_context.gps.alfa_window < 99) && (m_context.gps.Ublox.alfa_distance / 1000 < 255)) { // 250 meter na gijp
-            if (m_context.gps.alfa_exit > 99)
-                m_context.gps.alfa_exit = 99;  // begrenzen alfa_exit...
+        if ((gps->alfa_window < 99) && (gps_data->alfa_distance / 1000 < 255)) { // 250 meter na gijp
+            if (gps->alfa_exit > 99)
+                gps->alfa_exit = 99;  // begrenzen alfa_exit...
             var[0] =  scr_fld[0][1][0];
-            f_to_char(m_context.gps.alfa_window, val[0], 0);
+            f_to_char(gps->alfa_window, val[0], 0);
             var[1] =  scr_fld[1][1][1];
-            f_to_char(m_context.gps.alfa_exit, val[1], 0);
+            f_to_char(gps->alfa_exit, val[1], 0);
         } else { // alfa speed stats
             s[0] = avail_fields[26].value.num(); // a500 current run max speed
             s[1] = avail_fields[61].value.num(); // a500 max speed
@@ -440,25 +443,25 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->screen.spee
 
     int run_rectangle_length;
     int32_t millis = get_millis();
-    int log_seconds = (millis - m_context.gps.start_logging_millis) / 1000;  // aantal seconden sinds loggen is gestart
-    if (m_context.gps.S10.avg_s > 2000) {  // if the speed is higher then 2000 mm/s, reset the counter
+    int log_seconds = (millis - gps->start_logging_millis) / 1000;  // aantal seconden sinds loggen is gestart
+    if (gps->S10.avg_s > 2000) {  // if the speed is higher then 2000 mm/s, reset the counter
         low_speed_seconds = 0;
     }
     low_speed_seconds++;
     if (low_speed_seconds > 120) { // bar will be reset if the 10s speed drops under 2m/s for more then 120 s !!!!
-        m_context.gps.start_logging_millis = millis;
+        gps->start_logging_millis = millis;
     } 
-    run_rectangle_length = (m_context.gps.Ublox.alfa_distance / bar_length);  // 240 pixels is volledige bar, m_context.gps.ublox.alfa_distance zijn mm
+    run_rectangle_length = (gps_data->alfa_distance / bar_length);  // 240 pixels is volledige bar, gps->ublox.alfa_distance zijn mm
     if (field == 7) {
         run_rectangle_length = log_seconds * 240 / 1800;
         if (log_seconds > 1800) {
-            m_context.gps.start_logging_millis = millis;
+            gps->start_logging_millis = millis;
         }
     }  // 30 minutes = full bar
     else if (field == 8) {
         run_rectangle_length = log_seconds * 240 / 3600;
         if (log_seconds > 3600) {
-            m_context.gps.start_logging_millis = millis;
+            gps->start_logging_millis = millis;
         }
     }  // 60 minutes = full bar
     // if (bar_length) {
@@ -583,10 +586,11 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
 #else
     lv_statusbar_t * statusbar = (lv_statusbar_t *)ui_StatusPanel;
 #endif
+    const ubx_config_t *ubx = m_context.gps.ublox_config;
     lv_obj_t *panel;
     if ((panel = statusbar->gps_image)) {
         char tmp[24]={0}, *p = tmp;
-        if (m_context.gps.ublox_config && m_context.gps.ublox_config->is_on) {
+        if (ubx && ubx->is_on) {
             if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
                 lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
             }
@@ -597,10 +601,10 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
             return;
         }
         //if(statusbar->viewmode==2) { 
-            if (!!m_context.gps.ublox_config || !m_context.gps.ublox_config->ready){
+            if (!ubx || !ubx->ready){
                 memcpy(p, "-n-", 3);
             }
-            // else if(!m_context.gps.ublox_config->signal_ok) {
+            // else if(!ubx->signal_ok) {
             //     uint8_t qp = gblink;
             //     memcpy(p, "gps   ", 6);
             //     *(p+6)=0;
@@ -611,7 +615,7 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
             //     gblink = gblink==3 ? 0 : gblink+1;
             // }
             else {
-                p += xltoa(m_context.gps.ublox_config->ubx_msg.navPvt.numSV, p);
+                p += xltoa(ubx->ubx_msg.navPvt.numSV, p);
                 *p = 0;
             }
             p = lv_label_get_text(panel);
@@ -625,14 +629,14 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
     //             lv_label_set_text(panel, LV_SYMBOL_GPS);
     //         }
         }
-        // if (gps->ublox_config->ubx_msg.navPvt.numSV >= 4) {
+        // if (ubx->ubx_msg.navPvt.numSV >= 4) {
         //     lv_obj_set_style_img_recolor(panel, lv_color_hex(0xA9B7B9), LV_PART_MAIN | LV_STATE_DEFAULT);
         //     lv_obj_set_style_img_recolor_opa(panel, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-        // } else if (m_context.gps.ublox_config->ready) {
+        // } else if (ubx->ready) {
         //     lv_obj_set_style_img_recolor_opa(panel, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
         //     lv_obj_set_style_img_recolor(panel, lv_color_hex(0xEECE44), LV_PART_MAIN | LV_STATE_DEFAULT);
         // } else {
-        //     if (gps->ublox_config->rtc_conf->hw_type == UBX_TYPE_UNKNOWN) {
+        //     if (ubx->rtc_conf->hw_type == UBX_TYPE_UNKNOWN) {
         //         if (blink == 0) {
         //             lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
         //             blink = 1;
@@ -661,8 +665,9 @@ static void statusbar_update() {
 }
 
 static void update_sat_count() {
-    if(!m_context.gps.ublox_config) return;
-    struct nav_sat_s *nav_sat = &m_context.gps.ublox_config->ubx_msg.nav_sat;
+    const ubx_config_t *ubx = m_context.gps.ublox_config;
+    if(!ubx) return;
+    const struct nav_sat_s *nav_sat = &(ubx->ubx_msg.nav_sat);
     const struct svs_nav_sat_s * sat = 0;
     memset(&sat_count, 0, sizeof(sat_count_t));
     for(uint8_t i=0; i < nav_sat->numSvs; i++) {
@@ -698,18 +703,19 @@ static void update_sat_count() {
                 break;
         }
     }
-    ILOG(TAG, "gnss: %hhu, count: %hhu, G:%d, S:%d, E:%d, B:%d, Q:%d, R:%d, N:%d", m_context.gps.ublox_config->rtc_conf->gnss, nav_sat->numSvs, sat_count.gps, sat_count.sbas, sat_count.galileo, sat_count.beidou, sat_count.qzss, sat_count.glonass, sat_count.navic);
+    ILOG(TAG, "gnss: %hhu, count: %hhu, G:%d, S:%d, E:%d, B:%d, Q:%d, R:%d, N:%d", ubx->rtc_conf->gnss, nav_sat->numSvs, sat_count.gps, sat_count.sbas, sat_count.galileo, sat_count.beidou, sat_count.qzss, sat_count.glonass, sat_count.navic);
 }
 
 static size_t update_gps_info_row_str(char * p) {
-    if(!m_context.gps.ublox_config) return 0;
+    const struct ubx_config_s *ubx = m_context.gps.ublox_config;
+    if(!ubx) return 0;
     char * pc = p;
-    if(!m_context.gps.ublox_config->config_progress) {
+    if(ubx->config_progress) {
         memcpy(pc, "initializing", 12), pc += 12;
-    } else if(m_context.gps.ublox_config->ready) {
+    } else if(ubx->ready) {
         update_sat_count();
-        uint8_t gnss = m_context.gps.ublox_config->rtc_conf->gnss;
-        pc += xultoa(m_context.gps.ublox_config->ubx_msg.navPvt.numSV, pc);
+        uint8_t gnss = ubx->rtc_conf->gnss;
+        pc += xultoa(ubx->ubx_msg.navPvt.numSV, pc);
         memcpy(pc, "sat", 3), pc += 3;
         if((gnss & (1 << 0))!=0) {
             *pc++ = ' ';
@@ -744,16 +750,18 @@ static size_t update_gps_desc_row_str(char * p) {
     memcpy(pb, "Bat: ", 5), pb += 5;
     pb += f3_to_char(m_context_rtc.RTC_voltage_bat, pb);
     memcpy(pb, "V ", 2), pb += 2;
-    if(!m_context.gps.ublox_config) 
+    const struct gps_context_s *gps = &m_context.gps;
+    const struct ubx_config_s *ubx = gps->ublox_config;
+    if(!ubx) 
         goto end;
-    if(m_context.gps.ublox_config->first_fix){
+    if(ubx->first_fix){
         memcpy(pb, " fx: ", 5), pb += 5;
-        pb += xultoa(m_context.gps.ublox_config->first_fix, pb);
+        pb += xultoa(ubx->first_fix, pb);
         *pb++ = 's';
     }
-    if(m_context.gps.lost_frames) {
+    if(gps->lost_frames) {
         memcpy(pb, " lst: ", 6), pb += 6;
-        pb += xultoa(m_context.gps.lost_frames, pb), *pb=0;
+        pb += xultoa(gps->lost_frames, pb), *pb=0;
     }
     end:
     return pb - p;
@@ -777,7 +785,9 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
         int state = (int)arg;
         lv_obj_t *panel, *parent;
         stat_screen_t *sc_data = 0;
-        const char *gps = 0;
+        const struct gps_context_s *gps = &m_context.gps;
+        const struct ubx_config_s *ubx = gps->ublox_config;
+        const char *gpsstr = 0;
         const lv_img_dsc_t *img_src = 0;
         const char * scr_mode_str = "Screen mode ";
         count_flushed = -1;
@@ -798,23 +808,23 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 break;
             case SCREEN_MODE_GPS_INIT:
             case SCREEN_MODE_GPS_READY:
-                gps = m_context.gps.ublox_config ? ubx_chip_str(m_context.gps.ublox_config) : 0;
-                if(!gps) {
+                gpsstr = ubx ? ubx_chip_str(ubx) : 0;
+                if(!gpsstr) {
                     p=str;
                     img_src = &near_me_disabled_bold_48px;
                     memcpy(p, "NO GPS YET", 6), p += 6;
                 }
-                else if(!strcmp(gps, "UNKNOWN")) {
+                else if(!strcmp(gpsstr, "UNKNOWN")) {
                     p=str;
                     img_src = &near_me_disabled_bold_48px;
                     memcpy(p, "GPS -", 5), p += 5;
                 }
                 else {
-                    p += strlen(gps);
-                    memcpy(&str[0], gps, p-&str[0]);
+                    p += strlen(gpsstr);
+                    memcpy(&str[0], gpsstr, p-&str[0]);
                     img_src = &near_me_bold_48px;
                     *p++ = '@';
-                    p += xltoa(m_context.gps.ublox_config->rtc_conf->output_rate, p);
+                    p += xltoa(ubx->rtc_conf->output_rate, p);
                     memcpy(p, "Hz", 2), p += 2;
                 }
                 *p = 0;
@@ -903,11 +913,11 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
             case SCREEN_MODE_SPEED_1:
             link_for_screen_mode_speed_2:
                 gpsspd = gps_last_speed_smoothed(2) * m_context_rtc.RTC_calibration_speed;
-                if (!m_context.gps.ublox_config || !m_context.gps.ublox_config->ready || !m_context.gps.ublox_config->signal_ok) {
+                if (!ubx || !ubx->ready || !ubx->signal_ok) {
                     memcpy(p, "-.--", 4);
                     *(p+4) = 0;
                 }
-                else if(m_context.gps.S2.avg_s < 1000) {
+                else if(gps->S2.avg_s < 1000) {
                     memcpy(p, "0.00", 4);
                     *(p+4) = 0;
                 } else {

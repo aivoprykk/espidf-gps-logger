@@ -4,6 +4,7 @@ set(pdir ${CMAKE_CURRENT_SOURCE_DIR}/../)
 ##second stage !important! after component register
 
 set(srcs
+"lcd.c"
 "main.c"
 "dstat_screens.c"
 )
@@ -17,10 +18,6 @@ set(REQ gps_log)
 set(PRIVREQ driver esp_wifi
  display logger_common logger_context logger_button logger_vfs logger_str
  logger_config logger_ubx logger_adc logger_wifi logger_http)
-
-if(CONFIG_DISPLAY_USE_LVGL)
-set(srcs ${srcs} lcd.c)
-endif()
 
 if(CONFIG_BMX_ENABLE)
 set(srcs ${srcs} bmx.c)
