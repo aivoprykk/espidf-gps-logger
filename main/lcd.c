@@ -69,6 +69,12 @@ static bool lcd_ui_task_running = true;
 static bool lcd_ui_task_not_paused  = true;
 static bool lcd_ui_task_finished = 0;
 static SemaphoreHandle_t lcd_refreshing_sem = NULL;
+static SemaphoreHandle_t lcd_timer_sem = NULL;
+static esp_timer_handle_t lcd_periodic_timer = 0;
+static uint32_t ms = 0;
+static uint8_t ms_cancelled = 0;
+static uint8_t screen_mode_off_screen_count = 0;
+static TaskHandle_t lcd_ui_task_handle = 0;
 
 #if defined(CONFIG_BMX_ENABLE)
 extern bmx280_t *bmx280;
@@ -131,9 +137,9 @@ static const char * scr_fld_2[] = {
 static int low_speed_seconds = 0;
 static int16_t gps_image_angle = 0;
 static uint8_t gblink = 0;
-sat_count_t sat_count = {0};
-char gps_status_str[32] = {0};
-char bat_status_str[32] = {0};
+static sat_count_t sat_count = {0};
+static char gps_status_str[32] = {0};
+static char bat_status_str[32] = {0};
 static int8_t offset_mark = 0;
 static uint8_t offset_mark_dir = 0;
 static uint32_t next_gps_str_update = 0;
@@ -191,7 +197,8 @@ static uint32_t _sleep_screen(const struct display_s *me, int choice) {
         }
     }
     lv_label_set_text(ui_sleep_screen.myid, m_context_rtc.RTC_Sleep_txt);
-    lcd_ui_request_full_refresh(0); // first screen load will cause full refresh
+    // lcd_ui_request_full_refresh(0); // first screen load will cause full refresh
+    current_screen_mode = old_screen_mode = SCREEN_MODE_SLEEP;
     ++count;
     return 100;
 }
@@ -768,7 +775,8 @@ static size_t update_gps_desc_row_str(char * p) {
 }
 
 uint16_t get_offscreen_counter() {
-    return old_screen_mode == SCREEN_MODE_SHUT_DOWN && count_flushed==count ? screen_mode_counter : 0;
+    ILOG(TAG, "[%s] %hhu, %ld %hhu, %ld", __func__, old_screen_mode, count_flushed, screen_mode_off_screen_count, count);
+    return screen_mode_off_screen_count;
 }
 
 static uint32_t _update_screen(const struct display_s *me, const screen_mode_t screen_mode, void *arg) {
@@ -790,7 +798,6 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
         const char *gpsstr = 0;
         const lv_img_dsc_t *img_src = 0;
         const char * scr_mode_str = "Screen mode ";
-        count_flushed = -1;
         current_screen_mode = screen_mode;
         if(dots_counter && old_screen_mode != screen_mode) {
             dots_counter = 0;
@@ -1158,10 +1165,11 @@ uint32_t lcd_ui_screen_draw() {
     IMEAS_START();
     _lvgl_lock(0);
     _lvgl_unlock();
+    count_flushed = -1;
     uint32_t task_delay_ms = screen_cb(0);
-    IMEAS_END(TAG, "[%s] . %ld next delay %lu ms, screen_cb took: %llu us",  __FUNCTION__, count, task_delay_ms);
+    IMEAS_END(TAG, "[%s] . %ld (screen_cb req delay %lu), screen_cb took: %llu us",  __FUNCTION__, count, task_delay_ms);
     uint32_t timer_delay_ms = lcd_lv_timer_handler();
-    IMEAS_END(TAG, "[%s] .. %ld next delay %lu ms, timer_handler took: %llu us",  __FUNCTION__, count, timer_delay_ms);
+    IMEAS_END(TAG, "[%s] .. %ld (lcd_lv_timer_handler req delay %lu), timer_handler took: %llu us",  __FUNCTION__, count, timer_delay_ms);
 #if !defined(CONFIG_DISPLAY_DRIVER_ST7789)
 #if LVGL_VERSION_MAJOR <= 8
     _lv_disp_refr_timer(NULL);
@@ -1170,46 +1178,51 @@ uint32_t lcd_ui_screen_draw() {
     _lv_disp_refr_timer(NULL);
 #endif
     count_flushed = count;
+    if (old_screen_mode == SCREEN_MODE_SHUT_DOWN || old_screen_mode == SCREEN_MODE_SLEEP)
+        screen_mode_off_screen_count++;
+    if(ms_cancelled) {
+        task_delay_ms = 0;
+        ms_cancelled = 0;
+    } else
 #else
     if(timer_delay_ms > task_delay_ms)
 #endif
         task_delay_ms = timer_delay_ms;
-
-    IMEAS_END(TAG, "[%s] ... done. %ld next delay %lu ms, refr_timer took: %llu us", __FUNCTION__, count, task_delay_ms);
+    IMEAS_END(TAG, "[%s] ... done. %ld (final req delay %lu), refr_timer took: %llu us", __FUNCTION__, count, task_delay_ms);
     return task_delay_ms;
 };
 
-uint32_t ms = 0;
-TaskHandle_t lcd_ui_task_handle = 0;
-
 void lcd_ui_task(void *args) {
     ILOG(TAG, "[%s] task starting", __FUNCTION__);
-    uint32_t task_delay_ms = lcd_lv_timer_handler();
+    uint32_t task_delay_ms = lcd_lv_timer_handler(), now;
     while (lcd_ui_task_running) {
         if(xSemaphoreTake(lcd_refreshing_sem, portMAX_DELAY) == pdTRUE) {
             xSemaphoreGive(lcd_refreshing_sem);
         }
-        if(lcd_ui_task_not_paused || lcd_ui_task_resumed_for_times)
+        if(lcd_ui_task_not_paused || lcd_ui_task_resumed_for_times) {
+            ILOG(TAG, "[%s] ui next screen draw while %s (resumed_for_times:%hhu)", __FUNCTION__, (lcd_ui_task_not_paused ? "not paused" : lcd_ui_task_resumed_for_times ? "resumed" : ""), lcd_ui_task_resumed_for_times);
             task_delay_ms = lcd_ui_screen_draw();
+        }
         if(lcd_ui_task_running) {
+            now = get_millis();
 #if defined(CONFIG_DISPLAY_DRIVER_ST7789)
             delay_ms(task_delay_ms);
             UNUSED_PARAMETER(task_delay_ms);
 #else
-            ms = get_millis() + task_delay_ms;
-            // ILOG(TAG, "[%s] will delay for %lu ms", __FUNCTION__, task_delay_ms);
-            while (lcd_ui_task_running && get_millis() < ms) {
+            ms = now + task_delay_ms;
+            while (lcd_ui_task_running && now < ms) {
                 delay_ms(L_LVGL_TASK_MAX_DELAY_MS);
+                now = get_millis();
             }
 #endif
         }
     }
-    if(screen_mode_counter<1)
-        lcd_ui_screen_draw();
-    if(current_screen_mode == SCREEN_MODE_SLEEP) {
-        if(screen_mode_counter<2)
-            lcd_ui_screen_draw(); // full refresh before sleep
-    }
+    // if(screen_mode_counter<1)
+    // lcd_ui_screen_draw();
+    // if(current_screen_mode == SCREEN_MODE_SLEEP) {
+    //     if(screen_mode_counter<2)
+    //         lcd_ui_screen_draw(); // full refresh before sleep
+    // }
     ILOG(TAG, "[%s] task finishing", __FUNCTION__);
     lcd_ui_task_finished = 1;
     lcd_ui_task_handle = 0;
@@ -1217,12 +1230,12 @@ void lcd_ui_task(void *args) {
 }
 
 void lcd_ui_request_fast_refresh() {
-    ILOG(TAG, "[%s] at %ld ", __func__, count);
+    ILOG(TAG, "[%s] count: %ld ", __func__, count);
     display_epd_request_fast_update();
 }
 
 void lcd_ui_task_req_fast_refresh(int8_t fast_refresh_time) {
-    ILOG(TAG, "[%s] at %ld fast_refresh_time: %hhd", __func__, count, fast_refresh_time);
+    ILOG(TAG, "[%s] count: %ld fast_refresh_time: %hhd", __func__, count, fast_refresh_time);
     if(xSemaphoreTake(lcd_refreshing_sem, portMAX_DELAY) == pdTRUE) {
         if(lcd_ui_task_fast_refresh_on_time<count && fast_refresh_time>=0) {
             lcd_ui_task_fast_refresh_on_time = count+fast_refresh_time;
@@ -1235,19 +1248,19 @@ void lcd_ui_task_req_fast_refresh(int8_t fast_refresh_time) {
 }
 
 void lcd_ui_task_cancel_req_fast_refresh() {
-    ILOG(TAG, "[%s] at %ld", __func__, count);
+    ILOG(TAG, "[%s] count: %ld", __func__, count);
     lcd_ui_task_fast_refresh_on_time = -1;
 }
 
 void lcd_ui_request_full_refresh(bool force) {
-    ILOG(TAG, "[%s] at %ld force: %d count:%lu last_refr_counter:%lu", __func__, count, force ?1:0, count, count_last_full_refresh);
+    ILOG(TAG, "[%s] count: %ld force: %d count:%lu last_refr_counter:%lu", __func__, count, force ? 1 : 0, count, count_last_full_refresh);
     if(force || count==1 || count_last_full_refresh + 5  < count)
         display_epd_request_full_update();
     count_last_full_refresh = count;
 }
 
 void lcd_ui_task_req_full_refresh(int8_t full_refresh_time, bool full_refresh_force) {
-    ILOG(TAG, "[%s] at %ld full_refresh_time: %hhd, full_refresh_force: %d", __func__, count, full_refresh_time, full_refresh_force);
+    ILOG(TAG, "[%s] count: %ld full_refresh_time: %hhd, full_refresh_force: %d", __func__, count, full_refresh_time, full_refresh_force);
     if(xSemaphoreTake(lcd_refreshing_sem, portMAX_DELAY) == pdTRUE) {
         if(lcd_ui_task_full_refresh_on_time<count && full_refresh_time>=0) {
             lcd_ui_task_full_refresh_on_time = count+full_refresh_time;
@@ -1258,19 +1271,17 @@ void lcd_ui_task_req_full_refresh(int8_t full_refresh_time, bool full_refresh_fo
 }
 
 void lcd_ui_task_cancel_req_full_refresh() {
-    ILOG(TAG, "[%s] at %ld", __func__, count);
+    ILOG(TAG, "[%s] count: %ld", __func__, count);
     lcd_ui_task_full_refresh_on_time = -1;
     lcd_ui_task_full_refresh_on_time_force = false;
 }
 
-static esp_timer_handle_t lcd_periodic_timer = 0;
-
 static esp_err_t lcd_ui_task_resume_for_times_wo_timer(uint8_t times, int8_t fast_refresh_time, int8_t full_refresh_time, bool full_refresh_force) {
-    ILOG(TAG, "[%s] at %ld times: %hhu, full_refresh_time: %hhd, full_refresh_force: %d", __FUNCTION__, count, times, full_refresh_time, full_refresh_force);
+    ILOG(TAG, "[%s] count: %ld times: %hhu, full_refresh_time: %hhd, full_refresh_force: %d", __FUNCTION__, count, times, full_refresh_time, full_refresh_force);
     if(lcd_ui_task_running) {
         if(xSemaphoreTake(lcd_refreshing_sem, portMAX_DELAY) == pdTRUE) {
-            lcd_ui_task_resumed_for_times += times;
-            if(lcd_ui_task_resumed_for_times>times) {
+            //lcd_ui_task_resumed_for_times += times;
+            if(lcd_ui_task_resumed_for_times < times) {
                 lcd_ui_task_resumed_for_times = times;
             }
             xSemaphoreGive(lcd_refreshing_sem);
@@ -1288,44 +1299,83 @@ static esp_err_t lcd_ui_task_resume_for_times_wo_timer(uint8_t times, int8_t fas
     return ESP_ERR_TIMEOUT;
 }
 
-void lcd_ui_task_resume_for_times(uint8_t times, int8_t fast_refresh_time, int8_t full_refresh_time, bool full_refresh_force) {
-    ILOG(TAG, "[%s] at %ld times: %hhu, fast_refresh_time: %hhd, full_refresh_time: %hhd, full_refresh_force: %d", __func__, count, times, fast_refresh_time, full_refresh_time, full_refresh_force);
-    if(!lcd_ui_task_resume_for_times_wo_timer(times,fast_refresh_time,full_refresh_time, full_refresh_force)){
+static void lcd_periodic_timer_stop() {
+    ILOG(TAG, "[%s] count: %ld", __func__, count);
+    if(xSemaphoreTake(lcd_timer_sem, portMAX_DELAY) == pdTRUE) {
         if(esp_timer_is_active(lcd_periodic_timer)) {
-            ILOG(TAG, "[%s] restart periodic timer at %ld", __func__, count);
+            ILOG(TAG, "[%s] stop periodic timer count: %ld", __func__, count);
             ESP_ERROR_CHECK(esp_timer_stop(lcd_periodic_timer));
         }
-        ILOG(TAG, "[%s] start periodic timer at %ld", __func__, count);
-        ESP_ERROR_CHECK(esp_timer_start_periodic(lcd_periodic_timer, LCD_UI_TIMER_PERIOD_S*1000000));
+        xSemaphoreGive(lcd_timer_sem);
     }
 }
 
+static void lcd_periodic_timer_start() {
+    ILOG(TAG, "[%s] count: %ld", __func__, count);
+    if(xSemaphoreTake(lcd_timer_sem, portMAX_DELAY) == pdTRUE) {
+        if(!esp_timer_is_active(lcd_periodic_timer)) {
+            ILOG(TAG, "[%s] start periodic timer count: %ld", __func__, count);
+            ESP_ERROR_CHECK(esp_timer_start_periodic(lcd_periodic_timer, LCD_UI_TIMER_PERIOD_S*1000000));
+        }
+        xSemaphoreGive(lcd_timer_sem);
+    }
+}
+
+void lcd_ui_task_resume_for_times(uint8_t times, int8_t fast_refresh_time, int8_t full_refresh_time, bool full_refresh_force) {
+    ILOG(TAG, "[%s] count: %ld times: %hhu, fast_refresh_time: %hhd, full_refresh_time: %hhd, full_refresh_force: %d", __func__, count, times, fast_refresh_time, full_refresh_time, full_refresh_force);
+    if(lcd_ui_task_resumed_for_times>=times) {
+        ILOG(TAG, "[%s] already resumed for %hhu times", __func__, times);
+        return;
+    }
+    IMEAS_START();
+    if(!lcd_ui_task_resume_for_times_wo_timer(times,fast_refresh_time,full_refresh_time, full_refresh_force)){
+        lcd_periodic_timer_stop();
+        lcd_periodic_timer_start();
+    }
+    IMEAS_END(TAG, "[%s] took %llu us", __FUNCTION__);
+}
+
 void cancel_lcd_ui_delay() {
-    ILOG(TAG, "[%s] at %ld", __func__, count);
+    ILOG(TAG, "[%s] count: %ld", __func__, count);
     ms=0;
+    ms_cancelled = 1;
 }
 
 uint32_t get_lcd_ui_count() {
+    ILOG(TAG, "[%s] count: %ld", __func__, count);
     if(xSemaphoreTake(lcd_refreshing_sem, portMAX_DELAY) == pdTRUE) {
         xSemaphoreGive(lcd_refreshing_sem);
     }
     return count;
 }
 
-void lcd_ui_task_pause() {
-    ILOG(TAG, "[%s] at %ld", __func__, count);
+static void lcd_ui_task_pause_wo_timer() {
+    ILOG(TAG, "[%s] count: %ld", __func__, count);
     lcd_ui_task_cancel_req_full_refresh();
-    lcd_ui_task_not_paused = 0;
+    if(lcd_ui_task_not_paused) {
+        lcd_ui_task_not_paused = 0;
+    }
+}
+
+void lcd_ui_task_pause() {
+    ILOG(TAG, "[%s] count: %ld", __func__, count);
+    lcd_ui_task_pause_wo_timer();
+    lcd_periodic_timer_start();
+   
 }
 
 void lcd_ui_task_resume() {
-    ILOG(TAG, "[%s] at %ld", __func__, count);
+    ILOG(TAG, "[%s] count: %ld", __func__, count);
     lcd_ui_task_cancel_req_full_refresh();
-    lcd_ui_task_not_paused = 1;
+    if(!lcd_ui_task_not_paused)
+        lcd_ui_task_not_paused = 1;
     ms = 0;
-    if(esp_timer_is_active(lcd_periodic_timer)){
-        ILOG(TAG, "[%s] stop periodic timer at %ld", __func__, count);
-        ESP_ERROR_CHECK(esp_timer_stop(lcd_periodic_timer));
+    if(xSemaphoreTake(lcd_timer_sem, portMAX_DELAY) == pdTRUE) {
+        if(esp_timer_is_active(lcd_periodic_timer)){
+            ILOG(TAG, "[%s] stop periodic timer at count: %ld", __func__, count);
+            ESP_ERROR_CHECK(esp_timer_stop(lcd_periodic_timer));
+        }
+        xSemaphoreGive(lcd_timer_sem);
     }
 }
 
@@ -1343,6 +1393,8 @@ static void lcd_ui_start() {
     ui_init();
     lcd_refreshing_sem = xSemaphoreCreateBinary();
     xSemaphoreGive(lcd_refreshing_sem);
+    lcd_timer_sem = xSemaphoreCreateBinary();
+    xSemaphoreGive(lcd_timer_sem);
 #if !defined(CONFIG_DISPLAY_DRIVER_ST7789)
     lv_disp_t * disp = lv_disp_get_default();
 #if LVGL_VERSION_MAJOR <= 8
@@ -1355,7 +1407,6 @@ static void lcd_ui_start() {
         .callback = &lcd_periodic_timer_cb,
         .name = "lcd_periodic",
     };
-    ILOG(TAG, "[%s] create periodic timer", __func__);
     ESP_ERROR_CHECK(esp_timer_create(&lcd_periodic_timer_args, &lcd_periodic_timer));
 #endif
 }
@@ -1365,11 +1416,36 @@ void lcd_ui_start_task() {
     xTaskCreate(lcd_ui_task, "lcd_ui_task", LCD_UI_TASK_STACK_SIZE, NULL, 5, &lcd_ui_task_handle);
 }
 
+#define SHUT_DOWN_COUNTER_TIMES 300U
+#define SHUT_DOWN_COUNTER_DELAY 50U
+void wait_for_ui_task() {
+    ILOG(TAG, "[%s]", __func__);
+    IMEAS_START();
+    uint16_t shutdown_counter_running = SHUT_DOWN_COUNTER_TIMES;
+    uint32_t delay = SHUT_DOWN_COUNTER_DELAY;
+    lcd_periodic_timer_stop();
+    cancel_lcd_ui_delay();
+    if(lcd_ui_task_running && lcd_ui_task_is_paused())
+        lcd_ui_task_resume();
+    while(!get_offscreen_counter() && shutdown_counter_running) {
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
+        printf("[%s] left %hu times (*%lu ms) wait for off_screen drawn\n", __func__, shutdown_counter_running, delay);
+#endif
+        delay_ms(delay);
+        --shutdown_counter_running;
+    }
+    lcd_ui_task_pause_wo_timer();
+    IMEAS_END(TAG, "[%s] took %llu us", __FUNCTION__);
+}
+#undef SHUT_DOWN_COUNTER_TIMES
+#undef SHUT_DOWN_COUNTER_DELAY
+
 static void lcd_ui_stop() {
     ILOG(TAG, "[%s]", __func__);
     IMEAS_START();
-    uint32_t wait = get_millis() + 15000;
+    wait_for_ui_task();
     lcd_ui_task_running = false;
+    uint32_t wait = get_millis() + 15000;
     uint16_t i = 0;
     while (!lcd_ui_task_finished) {
         delay_ms(150);
@@ -1382,18 +1458,21 @@ static void lcd_ui_stop() {
         }
         ++i;
     }
-    ILOG(TAG, "[%s] task finished, %hu 150 ms loops, now delete timer and wait 4 more seconds", __func__, i);
+    //delay_ms(4000);
     if(lcd_periodic_timer){
-        if(esp_timer_is_active(lcd_periodic_timer))
-            esp_timer_stop(lcd_periodic_timer);
+        ILOG(TAG, "[%s] stop and delete periodic timer", __func__);
+        lcd_periodic_timer_stop();
         ESP_ERROR_CHECK(esp_timer_delete(lcd_periodic_timer));
         lcd_periodic_timer = 0;
     }
-    delay_ms(4000);
-    
+
     if (lcd_refreshing_sem != NULL){
         vSemaphoreDelete(lcd_refreshing_sem);
         lcd_refreshing_sem = NULL;
+    }
+    if (lcd_timer_sem != NULL){
+        vSemaphoreDelete(lcd_timer_sem);
+        lcd_timer_sem = NULL;
     }
     ui_deinit();
     IMEAS_END(TAG, "[%s] %hu 150 ms loops, total %llu us ",  __FUNCTION__, i);

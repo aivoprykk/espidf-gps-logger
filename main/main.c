@@ -117,9 +117,6 @@ static const char * const wakeup_reasons[] = {
     "ESP_SLEEP_WAKEUP_ULP",
     "ESP_SLEEP_WAKEUP_OTHER",
 };
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
-static uint32_t seconds_before_sleep = 0;
-#endif
 static uint32_t last_flush_time = 0;
 static uint16_t ubx_fail_count = 0;
 static uint8_t ubx_restart_requested = 0;
@@ -234,26 +231,6 @@ static int wakeup_init() {
     done:
     DMEAS_END(TAG, "[%s] took %llu us", __FUNCTION__);
     return ret;
-}
-
-static void wait_for_ui_task() {
-    ILOG(TAG, "[%s]", __func__);
-    uint8_t shutdown_counter_max = 10;
-    cancel_lcd_ui_delay();
-    while(!get_offscreen_counter() && shutdown_counter_max) {
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
-        ILOG(TAG, "[%s] %hhu times 200 ms left to lcd ui task paused, done %lu ms", __func__, shutdown_counter_max, seconds_before_sleep);
-#endif
-        delay_ms(200);
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
-        seconds_before_sleep += 200;
-#endif
-        --shutdown_counter_max;
-    }
-    lcd_ui_task_pause(); // no more screen updates from task
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
-    ILOG(TAG, "[%s] wait for lcd ui task done, total %lu ms", __func__, seconds_before_sleep);
-#endif
 }
 
 static void do_restart() {
@@ -1010,6 +987,7 @@ uint32_t screen_cb(void* arg) {
     }
     if (app_mode == APP_MODE_SHUT_DOWN || app_mode == APP_MODE_RESTART || m_context.request_shutdown || m_context.request_restart) {
         delay = op->update_screen(dspl, SCREEN_MODE_SHUT_DOWN, 0);
+        cur_screen = CUR_SCREEN_OFF_SCREEN;
         goto end;
     }
     if(lcd_count > 1){
