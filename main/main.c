@@ -244,7 +244,7 @@ static void go_to_sleep(uint64_t sleep_time) {
         wifi_uninit();
     }
     wait_for_ui_task();
-    write_rtc(&m_context_rtc);
+    // write_rtc(&m_context_rtc);
     if (esp_timer_is_active(sd_timer)) {
             esp_timer_stop(sd_timer);
             esp_timer_delete(sd_timer);
@@ -1605,11 +1605,9 @@ static void ctx_load_cb() {
     delay_ms(50);
 
     config_load_json(m_config);
-    if(m_config->screen.screen_rotation != m_context_rtc.RTC_screen_rotation) {
-        ILOG(TAG, "[%s] screen rotation change (rtc) %d to (conf) %d", __FUNCTION__, m_context_rtc.RTC_screen_rotation, m_config->screen.screen_rotation);
-    }
     g_context_rtc_add_config(&m_context_rtc, m_config);
-    display_set_rotation(m_context_rtc.RTC_screen_rotation);
+    if(display_get_rotation() != m_context_rtc.RTC_screen_rotation)
+        display_set_rotation(m_context_rtc.RTC_screen_rotation);
     g_context_add_config(&m_context, m_config);
     config_fix_values(m_config);
     g_context_ubx_add_config(&m_context, 0);
@@ -1660,10 +1658,13 @@ static void setup(void) {
 #endif
 
     display_init(&display);
-    display_set_rotation(m_context_rtc.RTC_screen_rotation);
+    init_rtc();
+    display_set_rotation(m_context_rtc.RTC_screen_rotation==-1 ? SCR_DEFAULT_ROTATION : m_context_rtc.RTC_screen_rotation);
+
     if(!m_context_rtc.RTC_screen_auto_refresh){
        lcd_ui_task_pause();
     }
+    
     lcd_ui_start_task();
     delay_ms(50);
     // const esp_timer_create_args_t screen_periodic_timer_args = {
