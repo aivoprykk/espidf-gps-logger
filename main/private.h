@@ -159,6 +159,7 @@ void lcd_ui_task_req_fast_refresh(int8_t full_refresh_time);
 void lcd_ui_task_cancel_req_fast_refresh();
 void wifi_sta_conf_sync();
 static esp_err_t events_uninit();
+void wait_for_ui_task();
 
 // void lcd_ui_request_fast_refresh(bool force);
 

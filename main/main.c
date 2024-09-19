@@ -85,6 +85,7 @@ static struct logger_config_s * m_config = 0;
 // 1 - config, wifi and http running
 // 2 - run, gps running
 static app_mode_t app_mode = APP_MODE_UNKNOWN;
+static uint8_t config_initialized = 0;
 #if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
 static const char * const app_mode_str[] = { APP_MODE_LIST(STRINGIFY) };
 #endif
@@ -116,9 +117,6 @@ static const char * const wakeup_reasons[] = {
     "ESP_SLEEP_WAKEUP_ULP",
     "ESP_SLEEP_WAKEUP_OTHER",
 };
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
-static uint32_t seconds_before_sleep = 0;
-#endif
 static uint32_t last_flush_time = 0;
 static uint16_t ubx_fail_count = 0;
 static uint8_t ubx_restart_requested = 0;
@@ -235,26 +233,6 @@ static int wakeup_init() {
     return ret;
 }
 
-static void wait_for_ui_task() {
-    ILOG(TAG, "[%s]", __func__);
-    uint8_t shutdown_counter_max = 10;
-    cancel_lcd_ui_delay();
-    while(!get_offscreen_counter() && shutdown_counter_max) {
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
-        ILOG(TAG, "[%s] %hhu times 200 ms left to lcd ui task paused, done %lu ms", __func__, shutdown_counter_max, seconds_before_sleep);
-#endif
-        delay_ms(200);
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
-        seconds_before_sleep += 200;
-#endif
-        --shutdown_counter_max;
-    }
-    lcd_ui_task_pause(); // no more screen updates from task
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
-    ILOG(TAG, "[%s] wait for lcd ui task done, total %lu ms", __func__, seconds_before_sleep);
-#endif
-}
-
 static void do_restart() {
     ILOG(TAG, "[%s]", __func__);
     esp_restart();
@@ -266,7 +244,7 @@ static void go_to_sleep(uint64_t sleep_time) {
         wifi_uninit();
     }
     wait_for_ui_task();
-    write_rtc(&m_context_rtc);
+    // write_rtc(&m_context_rtc);
     if (esp_timer_is_active(sd_timer)) {
             esp_timer_stop(sd_timer);
             esp_timer_delete(sd_timer);
@@ -292,20 +270,22 @@ static void go_to_sleep(uint64_t sleep_time) {
 }
 
 static int shut_down_gps(int no_sleep) {
-    ILOG(TAG, "[%s]", __func__); 
-    if ((!m_context.gps.ublox_config || !m_context.gps.ublox_config->uart_setup_ok) && no_sleep) 
+    ILOG(TAG, "[%s]", __func__);
+    struct gps_context_s *gps = &m_context.gps;
+    struct ubx_config_s *ubx = gps->ublox_config;
+    if ((!ubx || !ubx->uart_setup_ok) && no_sleep) 
         return 0;
-    if(!m_context.gps.ublox_config)
+    if(!ubx)
         goto end;
     int ret = 0;
-    if(m_context.gps.ublox_config->time_set)
+    if(ubx->time_set)
             next_screen = CUR_SCREEN_SAVE_SESSION;
-    if (m_context.gps.ublox_config->ready) {
-        m_context.gps.ublox_config->signal_ok = false;
-        m_context.gps.GPS_delay = 0;
+    if (ubx->ready) {
+        ubx->signal_ok = false;
+        gps->GPS_delay = 0;
     }
-    if (m_context.gps.ublox_config->time_set) {  // Only safe to RTC memory if new GPS data is available !!
-        m_context_rtc.RTC_distance = m_context.gps.Ublox.total_distance / 1000000;
+    if (ubx->time_set) {  // Only safe to RTC memory if new GPS data is available !!
+        m_context_rtc.RTC_distance = gps->Ublox.total_distance / 1000000;
         m_context_rtc.RTC_alp = avail_fields[26].value.num();
         m_context_rtc.RTC_500m = avail_fields[9].value.num();
         m_context_rtc.RTC_1h = avail_fields[38].value.num();
@@ -317,22 +297,22 @@ static int shut_down_gps(int no_sleep) {
         m_context_rtc.RTC_R3_10s = avail_fields[18].value.num();
         m_context_rtc.RTC_R4_10s = avail_fields[19].value.num();
         m_context_rtc.RTC_R5_10s = avail_fields[20].value.num();
-        if (m_context.gps.files_opened) {
+        if (gps->files_opened) {
             if (m_context.config->gps.log_txt) {
-                session_info(&m_context.gps, &m_context.gps.Ublox);
-                session_results_s(&m_context.gps, &m_context.gps.S2, m_context_rtc.RTC_calibration_speed);
-                session_results_s(&m_context.gps, &m_context.gps.S10, m_context_rtc.RTC_calibration_speed);
-                session_results_s(&m_context.gps, &m_context.gps.S1800, m_context_rtc.RTC_calibration_speed);
-                session_results_s(&m_context.gps, &m_context.gps.S3600, m_context_rtc.RTC_calibration_speed);
-                session_results_m(&m_context.gps, &m_context.gps.M100, m_context_rtc.RTC_calibration_speed);
-                session_results_m(&m_context.gps, &m_context.gps.M500, m_context_rtc.RTC_calibration_speed);
-                session_results_m(&m_context.gps, &m_context.gps.M1852, m_context_rtc.RTC_calibration_speed);
-                session_results_alfa(&m_context.gps, &m_context.gps.A250, &m_context.gps.M250, m_context_rtc.RTC_calibration_speed);
-                session_results_alfa(&m_context.gps, &m_context.gps.A500, &m_context.gps.M500, m_context_rtc.RTC_calibration_speed);
+                session_info(gps, &gps->Ublox);
+                session_results_s(gps, &gps->S2, m_context_rtc.RTC_calibration_speed);
+                session_results_s(gps, &gps->S10, m_context_rtc.RTC_calibration_speed);
+                session_results_s(gps, &gps->S1800, m_context_rtc.RTC_calibration_speed);
+                session_results_s(gps, &gps->S3600, m_context_rtc.RTC_calibration_speed);
+                session_results_m(gps, &gps->M100, m_context_rtc.RTC_calibration_speed);
+                session_results_m(gps, &gps->M500, m_context_rtc.RTC_calibration_speed);
+                session_results_m(gps, &gps->M1852, m_context_rtc.RTC_calibration_speed);
+                session_results_alfa(gps, &gps->A250, &gps->M250, m_context_rtc.RTC_calibration_speed);
+                session_results_alfa(gps, &gps->A500, &gps->M500, m_context_rtc.RTC_calibration_speed);
             }
             ret += 100;
             // flush_files(&m_context);
-            close_files(&m_context.gps);
+            close_files(gps);
         }
         struct tm tms;
         getLocalTime(&tms, 0);
@@ -349,11 +329,11 @@ static int shut_down_gps(int no_sleep) {
         }
     }
     timeout = get_millis() + 1000;
-    while(m_context.gps.ublox_config->config_progress && timeout > get_millis()) {
+    while(ubx->config_progress && timeout > get_millis()) {
         delay_ms(100);
     }
-    ubx_off(m_context.gps.ublox_config);
-    m_context.gps.ublox_config->time_set = 0;
+    ubx_off(ubx);
+    ubx->time_set = 0;
 #if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
 #endif
@@ -448,11 +428,12 @@ static void s(void* arg) {
 #define TIME_DELAY_FIRST_FIX 10       // 10 navpvt messages before start logging
 
 esp_err_t ubx_msg_do(ubx_msg_byte_ctx_t *mctx) {
-    ubx_config_t *ubx = m_context.gps.ublox_config;
-    ubx_msg_t * ubxMessage = &ubx->ubx_msg;
-    struct nav_pvt_s * nav_pvt = &ubxMessage->navPvt;
-    gps_context_t *gps = &m_context.gps;
-    uint32_t now = get_millis();
+    struct gps_context_s *gps = &m_context.gps;
+    struct ubx_config_s *ubx = gps->ublox_config;
+    struct gps_data_s *gps_data = &gps->Ublox;
+    struct ubx_msg_s * ubxMessage = &ubx->ubx_msg;
+    const struct nav_pvt_s * nav_pvt = &ubxMessage->navPvt;
+    const uint32_t now = get_millis();
     esp_err_t ret = ESP_OK;
     switch(mctx->ubx_msg_type) {
             case MT_NAV_DOP:
@@ -506,7 +487,7 @@ esp_err_t ubx_msg_do(ubx_msg_byte_ctx_t *mctx) {
                         if ((nav_pvt->numSV <= MIN_numSV_GPS_SPEED_OK) || ((nav_pvt->sAcc / 1000.0f) > MAX_Sacc_GPS_SPEED_OK) || (nav_pvt->gSpeed / 1000.0f > MAX_GPS_SPEED_OK)) {
                             //printf("[%s] GPS speed reset.\n", __FUNCTION__);
                             gps->gps_speed = 0;
-                            gps->Ublox.run_start_time = 0;
+                            gps_data->run_start_time = 0;
                         }
                         //saved_count++;
                         if (gps->gps_speed > 1000) { // log only when speed is above 1 m/s == 3.6 km/h
@@ -525,7 +506,7 @@ esp_err_t ubx_msg_do(ubx_msg_byte_ctx_t *mctx) {
                                 lcd_ui_task_resume_for_times(1, -1, -1, true);
                             }
                         }
-                        ret = push_gps_data(gps, &gps->Ublox, nav_pvt->lat / 10000000.0f, nav_pvt->lon / 10000000.0f, gps->gps_speed);
+                        ret = push_gps_data(gps, gps_data, nav_pvt->lat / 10000000.0f, nav_pvt->lon / 10000000.0f, gps->gps_speed);
                         if(ret){
                         #if defined(GPS_TIMER_STATS)
                             ++push_failed_count;
@@ -543,9 +524,9 @@ esp_err_t ubx_msg_do(ubx_msg_byte_ctx_t *mctx) {
                         gps->alfa_window = alfa_indicator(gps, nav_pvt->heading / 100000.0f);
                         // new run detected, reset run distance
                         if (gps->run_count != gps->old_run_count) {
-                            gps->Ublox.run_distance = 0;
+                            gps_data->run_distance = 0;
                             if (gps->gps_speed / 1000.0f > MAX_GPS_SPEED_OK){
-                                gps->Ublox.run_start_time = now;
+                                gps_data->run_start_time = now;
                                 gps->record = 0;
                                 cancel_lcd_ui_delay();
                             }
@@ -577,7 +558,7 @@ esp_err_t ubx_msg_do(ubx_msg_byte_ctx_t *mctx) {
             case MT_NAV_SAT:
                 ubxMessage->count_nav_sat++;
                 // ubxMessage->nav_sat.iTOW=ubxMessage->nav_sat.iTOW-18*1000; //to match 18s diff UTC nav pvt & GPS nav sat !!!
-                push_gps_sat_info(&m_context.gps.Ublox_Sat, &ubxMessage->nav_sat);
+                push_gps_sat_info(&gps->Ublox_Sat, &ubxMessage->nav_sat);
                 break;
             default:
                 break;
@@ -609,7 +590,7 @@ static void gpsTask(void *parameter) {
         }
 #endif
         now = get_millis();
-        if (!m_context.gps.ublox_config->ready || !ubxMessage->mon_ver.hwVersion[0]|| ubx_restart_requested) {
+        if (!ubx->ready || !ubxMessage->mon_ver.hwVersion[0]|| ubx_restart_requested) {
             mt = now - (ubx->ready ? ubx->ready_time : 5000);
             // ILOG(TAG, "[%s] Gps init ... (%lums)", __FUNCTION__, mt);
             if (mt > 10000) { // 5 seconds
@@ -619,15 +600,17 @@ static void gpsTask(void *parameter) {
                     ubx_fail_count++;
                 }
                 if(app_mode == APP_MODE_GPS)
-                    ubx_setup(m_context.gps.ublox_config);
+                    ubx_setup(ubx);
             }
             if(low_bat_countdown) {
                 delay_ms(500);
                 goto loop_tail;
             }
             if(ubx_fail_count>50) {
-                if(!ubxMessage->mon_ver.hwVersion[0]) // only when no hwVersion is received
+                if(!ubxMessage->mon_ver.hwVersion[0]) { // only when no hwVersion is received
                     m_context.request_restart = true;
+                    ILOG(TAG, "[%s] Gps init failed, restart requested.", __FUNCTION__);
+                }
                 else
                     ubx_fail_count = 0;
             }
@@ -639,9 +622,9 @@ static void gpsTask(void *parameter) {
             ubx_msg_do(&mctx);
             ubx_fail_count = 0;
         } else {
-            if((m_context.gps.ublox_config->ready && ubxMessage->mon_ver.hwVersion[0] && (ret == ESP_ERR_TIMEOUT && ubx_fail_count>3)) || ubx_fail_count>20) {
-                if(m_context.gps.ublox_config->ready) {
-                    m_context.gps.ublox_config->ready = false;
+            if((ubx->ready && ubxMessage->mon_ver.hwVersion[0] && (ret == ESP_ERR_TIMEOUT && ubx_fail_count>3)) || ubx_fail_count>20) {
+                if(ubx->ready) {
+                    ubx->ready = false;
                     ubxMessage->mon_ver.hwVersion[0] = 0;
                 }
                 ubx_fail_count++;
@@ -796,9 +779,10 @@ static void button_timer_cb(void *arg) {
     }
     else {
         ILOG(TAG, "[%s] Button triple click arrived, %s", __func__, button_press_mode == 3 ? "lllong" : button_press_mode == 2 ? "llong" : button_press_mode == 1 ? "long" : "short");
+        ubx_config_t *ubx = m_context.gps.ublox_config;
         if(!(app_mode == APP_MODE_GPS && next_screen == CUR_SCREEN_SETTINGS)) {
             ILOG(TAG, "[%s] screen rotation change requested", __func__);
-            if(set_screen_cfg_item(m_config, 6, m_context.gps.ublox_config->rtc_conf->hw_type)) {
+            if(set_screen_cfg_item(m_config, 6, ubx->rtc_conf->hw_type)) {
                 g_context_rtc_add_config(&m_context_rtc, m_context.config);
                 display_set_rotation(m_context_rtc.RTC_screen_rotation);
             }
@@ -806,12 +790,12 @@ static void button_timer_cb(void *arg) {
         }
         if (app_mode == APP_MODE_GPS) {
             if(next_screen==CUR_SCREEN_SETTINGS) {
-                ubx_hw_t hw_type = m_context.gps.ublox_config->rtc_conf->hw_type;
+                const ubx_hw_t hw_type = ubx->rtc_conf->hw_type;
                 ILOG(TAG, "[%s] settings screen change requested", __func__);
                 if(cfg_screen == CFG_GROUP_GPS) {
                     if(set_gps_cfg_item(m_config, gps_cfg_item, hw_type)) {
                         ILOG(TAG, "[%s] settings screen change requested", __func__);
-                        g_context_ubx_add_config(&m_context, m_context.gps.ublox_config);
+                        g_context_ubx_add_config(&m_context, ubx);
                         g_context_rtc_add_config(&m_context_rtc, m_context.config);
                         ubx_restart_requested = 1;
                     }
@@ -861,17 +845,19 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
             esp_timer_start_once(button_timer, BUTTON_CB_WAIT_BEFORE);
 #if defined(CONFIG_LOGGER_BUTTON_GPIO_1)
         } else if(num==1) {
+            struct gps_context_s *gps = &m_context.gps;
+            const struct ubx_config_s *ubx = gps->ublox_config;
             if(tm >= CONFIG_LOGGER_BUTTON_LONG_PRESS_TIME_MS) {
-                if (m_context.gps.ublox_config->ready && m_context.gps.ublox_config->signal_ok) {
-                    reset_time_stats(&m_context.gps.s10);
-                    reset_time_stats(&m_context.gps.s2);
-                    reset_alfa_stats(&m_context.gps.a500);
+                if (ubx->ready && ubx->signal_ok) {
+                    reset_time_stats(&gps->s10);
+                    reset_time_stats(&gps->s2);
+                    reset_alfa_stats(&gps->a500);
                 }
             } else {
 #ifdef CONFIG_DISPLAY_DRIVER_ST7789
                 m_context.display_bl_level_set = m_context.display_bl_level_set >= 100 ? 20 : m_context.display_bl_level_set + 20;
 #endif
-                /* if (m_context.gps.ublox_config->ready && m_context.gps.ublox_config->signal_ok) {
+                /* if (ubx->ready && ubx->signal_ok) {
                     m_context.gpio12_screen_cur++;
                     if (m_context.gpio12_screen_cur >= m_context.gpio12_screen_count)
                         m_context.gpio12_screen_cur = 0;
@@ -929,8 +915,10 @@ uint32_t screen_cb(void* arg) {
         goto end;
     }
     bool run_is_active = false;
+    struct gps_context_s *gps = &m_context.gps;
+    const struct ubx_config_s *ubx = gps->ublox_config;
     if(app_mode == APP_MODE_GPS) {
-        run_is_active = (m_config && m_context.gps.ublox_config && m_context.gps.ublox_config->signal_ok && m_context.gps.gps_speed / 1000.0f >= m_context.config->screen.stat_speed);
+        run_is_active = (m_config && ubx && ubx->signal_ok && gps->gps_speed / 1000.0f >= m_context.config->screen.stat_speed);
         if (run_is_active && next_screen != CUR_SCREEN_NONE){
             next_screen = CUR_SCREEN_NONE;
         }
@@ -997,8 +985,9 @@ uint32_t screen_cb(void* arg) {
         op->sleep_screen(dspl, 0);
         goto end;
     }
-    if (app_mode == APP_MODE_SHUT_DOWN || app_mode == APP_MODE_RESTART) {
+    if (app_mode == APP_MODE_SHUT_DOWN || app_mode == APP_MODE_RESTART || m_context.request_shutdown || m_context.request_restart) {
         delay = op->update_screen(dspl, SCREEN_MODE_SHUT_DOWN, 0);
+        cur_screen = CUR_SCREEN_OFF_SCREEN;
         goto end;
     }
     if(lcd_count > 1){
@@ -1054,56 +1043,56 @@ uint32_t screen_cb(void* arg) {
             cur_screen = CUR_SCREEN_WIFI;
         }
     } else if (app_mode == APP_MODE_GPS) {
-        if (m_context.gps.ublox_config && m_context.gps.ublox_config->time_set && (m_context.gps.ublox_config->ubx_msg.navPvt.iTOW - m_context.gps.old_nav_pvt_itow) > (m_context.gps.time_out_gps_msg * 5) && next_screen == CUR_SCREEN_NONE) {
+        if (ubx && ubx->time_set && (ubx->ubx_msg.navPvt.iTOW - gps->old_nav_pvt_itow) > (gps->time_out_gps_msg * 5) && next_screen == CUR_SCREEN_NONE) {
             gpstrblscr:
             delay=op->update_screen(dspl, SCREEN_MODE_GPS_TROUBLE, 0);  // gps signal lost !!!
             cur_screen = CUR_SCREEN_GPS_TROUBLE;
-        } else if ((next_screen != CUR_SCREEN_GPS_STATS && (!m_context.gps.ublox_config || !m_context.gps.ublox_config->ready || (m_context.gps.ublox_config->ready && !m_context.gps.ublox_config->ubx_msg.mon_ver.hwVersion[0]))) || (!run_is_active && next_screen == CUR_SCREEN_GPS_INFO)) {
-            // if(!m_context.gps.ublox_config->ubx_msg.mon_ver.hwVersion[0]) goto bootscreen;
+        } else if ((next_screen != CUR_SCREEN_GPS_STATS && (!ubx || !ubx->ready || (ubx->ready && !ubx->ubx_msg.mon_ver.hwVersion[0]))) || (!run_is_active && next_screen == CUR_SCREEN_GPS_INFO)) {
+            // if(!ubx->ubx_msg.mon_ver.hwVersion[0]) goto bootscreen;
             delay=op->update_screen(dspl, SCREEN_MODE_GPS_INIT, 0);
             cur_screen = CUR_SCREEN_GPS_INFO;
         }
-        else if (!run_is_active && (m_context.gps.S2.display_max_speed  > 1000 || next_screen == CUR_SCREEN_GPS_STATS)) {
-            if (m_context.gps.record && record_done == 255) {
-                if(m_context.gps.S2.display_max_speed > 10000) // when more than 32k/h show records
+        else if (!run_is_active && (gps->S2.display_max_speed  > 1000 || next_screen == CUR_SCREEN_GPS_STATS)) {
+            if (gps->record && record_done == 255) {
+                if(gps->S2.display_max_speed > 10000) // when more than 32k/h show records
                     record_done=0;
-                m_context.gps.record = 0;
+                gps->record = 0;
             }
-            if (m_context.gps.S10.record && record_done < 2) { // 10sec max record
+            if (gps->S10.record && record_done < 2) { // 10sec max record
                 struct record_forwarder_s r = { &avail_fields[16], &avail_fields[17], record_done==0};
                 delay=op->update_screen(dspl, SCREEN_MODE_RECORD, &r);
                 ++record_done;
                 goto end;
             }
-            else if (m_context.gps.S2.record && record_done < 4) { // 2sec max record
+            else if (gps->S2.record && record_done < 4) { // 2sec max record
                 if(record_done<2) record_done = 2;
                 struct record_forwarder_s r = { &avail_fields[47], &avail_fields[48] , record_done==2};
                 delay=op->update_screen(dspl, SCREEN_MODE_RECORD, &r);
                 ++record_done;
                 goto end;
             }
-            else if (m_context.gps.M250.record && record_done < 6) { // 500m max record
+            else if (gps->M250.record && record_done < 6) { // 500m max record
                 if(record_done<4) record_done = 4;
                 struct record_forwarder_s r = { &avail_fields[51], &avail_fields[52] , record_done==4};
                 delay=op->update_screen(dspl, SCREEN_MODE_RECORD, &r);
                 ++record_done;
                 goto end;
             }
-            else if (m_context.gps.M500.record && record_done < 8) { // 500m max record
+            else if (gps->M500.record && record_done < 8) { // 500m max record
                 if(record_done<6) record_done = 6;
                 struct record_forwarder_s r = { &avail_fields[53], &avail_fields[54] , record_done==6};
                 delay=op->update_screen(dspl, SCREEN_MODE_RECORD, &r);
                 ++record_done;
                 goto end;
             }
-            else if (m_context.gps.M1852.record && record_done < 10) { // 1852m max record
+            else if (gps->M1852.record && record_done < 10) { // 1852m max record
                 if(record_done<8) record_done = 8;
                 struct record_forwarder_s r = { &avail_fields[55], &avail_fields[56] , record_done==8};
                 delay=op->update_screen(dspl, SCREEN_MODE_RECORD, &r);
                 ++record_done;
                 goto end;
             }
-             else if (m_context.gps.A500.record && record_done < 12) { // 500m alfa max record
+             else if (gps->A500.record && record_done < 12) { // 500m alfa max record
                 if(record_done<10) record_done = 10;
                 struct record_forwarder_s r = { &avail_fields[42], &avail_fields[43] , record_done==10};
                 delay=op->update_screen(dspl, SCREEN_MODE_RECORD, &r);
@@ -1123,7 +1112,7 @@ uint32_t screen_cb(void* arg) {
             delay=op->update_screen(dspl, m_context.stat_screen_cur+1, 0);
             cur_screen = CUR_SCREEN_GPS_STATS;
         } else {
-            if(m_context.gps.ublox_config && !m_context.gps.ublox_config->ubx_msg.mon_ver.hwVersion[0] && m_context.gps.ublox_config->ready) goto gpstrblscr;
+            if(ubx && !ubx->ubx_msg.mon_ver.hwVersion[0] && ubx->ready) goto gpstrblscr;
             if (m_config && m_config->screen.speed_large_font == 2) {
                     delay=op->update_screen(dspl, SCREEN_MODE_SPEED_2, 0);
             } else {
@@ -1291,13 +1280,14 @@ void app_mode_gps_handler(int verbose) {
     if (gps_task_handle || app_mode_gps_on) return;
     DMEAS_START();
     app_mode = APP_MODE_GPS;
-    app_mode_gps_on = 1;
     if (wifi_context.s_wifi_initialized) {
         wifi_uninit();
         m_context.NTP_time_set = 0;
     }
-    if(!m_context.sdOK)
+    if(!config_initialized) {
         goto end;
+    }
+    app_mode_gps_on = 1;
     xTaskCreatePinnedToCore(gpsTask,   /* Task function. */
                 "gpsTask", /* String with name of task. */
                 CONFIG_GPS_LOG_STACK_SIZE,  /* Stack size in bytes. */
@@ -1603,6 +1593,9 @@ static void config_changed_cb(const char *key) {
 }
 
 static void ctx_load_cb() {
+    ILOG(TAG, "[%s]", __FUNCTION__);
+    m_context.freeSpace = sdcard_space();
+    ESP_LOGI(TAG, "[%s] sdcard mounted.", __FUNCTION__);
     m_config = config_new();
     m_config->config_changed_screen_cb = config_changed_cb;
     g_context_defaults(&m_context);
@@ -1610,36 +1603,25 @@ static void ctx_load_cb() {
     if (!m_context.gps.Gps_fields_OK)
         init_gps_context_fields(&m_context.gps);
     delay_ms(50);
+
+    config_load_json(m_config);
+    g_context_rtc_add_config(&m_context_rtc, m_config);
+    if(display_get_rotation() != m_context_rtc.RTC_screen_rotation)
+        display_set_rotation(m_context_rtc.RTC_screen_rotation);
+    g_context_add_config(&m_context, m_config);
+    config_fix_values(m_config);
+    g_context_ubx_add_config(&m_context, 0);
+    log_config_add_config(m_context.gps.log_config, m_config);
+    config_initialized = 1;
+    if(!m_context_rtc.RTC_screen_auto_refresh){
+       lcd_ui_task_resume_for_times(1, -1, -1, false);
+    }
 }
 
 static void sd_mount_cb(void* arg) {
     if(!sdcard_is_mounted()) {
         if(sdcard_mount()==ESP_OK) {
-            ctx_load_cb();
-
             m_context.sdOK = true;
-            m_context.freeSpace = sdcard_space();
-            ESP_LOGI(TAG, "[%s] sdcard mounted.", __FUNCTION__);
-
-            config_load_json(m_config);
-            if(m_config->screen.screen_rotation != m_context_rtc.RTC_screen_rotation) {
-                ILOG(TAG, "[%s] screen rotation change (rtc) %d to (conf) %d", __FUNCTION__, m_context_rtc.RTC_screen_rotation, m_config->screen.screen_rotation);
-            }
-            g_context_rtc_add_config(&m_context_rtc, m_config);
-            display_set_rotation(m_context_rtc.RTC_screen_rotation);
-            g_context_add_config(&m_context, m_config);
-            config_fix_values(m_config);
-            g_context_ubx_add_config(&m_context, 0);
-            log_config_add_config(m_context.gps.log_config, m_config);
-            /* strbf_t sbc;
-            strbf_init(&sbc);
-            config_encode_json(&sbc);
-            printf("conf:%s, size:%d", strbf_finish(&sbc), sbc.cur-sbc.start);
-            strbf_reset(&sbc);
-            config_get_json(&sbc, 0);
-            printf("conf:%s, size:%d", strbf_finish(&sbc), sbc.cur-sbc.start);
-            strbf_free(&sbc);
-            */
         }
         else if (!esp_timer_is_active(sd_timer)) {
             const esp_timer_create_args_t sd_timer_args = {
@@ -1676,10 +1658,13 @@ static void setup(void) {
 #endif
 
     display_init(&display);
-    display_set_rotation(m_context_rtc.RTC_screen_rotation);
+    init_rtc();
+    display_set_rotation(m_context_rtc.RTC_screen_rotation==-1 ? SCR_DEFAULT_ROTATION : m_context_rtc.RTC_screen_rotation);
+
     if(!m_context_rtc.RTC_screen_auto_refresh){
        lcd_ui_task_pause();
     }
+    
     lcd_ui_start_task();
     delay_ms(50);
     // const esp_timer_create_args_t screen_periodic_timer_args = {
@@ -1760,7 +1745,7 @@ void app_main(void) {
             if(low_bat_countdown) {
                 millis = get_millis();
                 if(millis > low_bat_countdown) bat_timeout = 100;
-                ILOG(TAG, "[%s] %lu low bat count:%d, seconds left: %lu", __FUNCTION__, loops, m_context.low_bat_count, (bat_timeout == 100 ? 0 : (low_bat_countdown-millis)));
+                ESP_LOGW(TAG, "[%s] %lu low bat count:%d, seconds left: %lu", __FUNCTION__, loops, m_context.low_bat_count, (bat_timeout == 100 ? 0 : (low_bat_countdown-millis)));
                 if(!bat_timeout && m_context.low_bat_count==LOW_BAT_TRIGGER) bat_timeout = 1;
                 if(m_context.low_bat_count == LOW_BAT_TRIGGER+2) m_context.low_bat_count=0; // increase low bat count
                 else m_context.low_bat_count++;
@@ -1781,6 +1766,10 @@ void app_main(void) {
             }
             m_context.request_shutdown = 0;
             m_context.request_restart = 0;
+        }
+        if(!m_config && m_context.sdOK) {
+            ILOG(TAG, "[%s] config not loaded, do it as sdcard is initialized.", __FUNCTION__);
+            ctx_load_cb();
         }
         if (loops++ >= 99) {
 #if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2 || defined(DEBUG))

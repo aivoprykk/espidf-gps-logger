@@ -2,21 +2,9 @@
 set(pdir ${CMAKE_CURRENT_SOURCE_DIR}/../)
 
 ##second stage !important! after component register
-if(CONFIG_LOGGER_BUILD_MODE_DEV)
-MESSAGE("Dev mode selected")
-set(ver "${CONFIG_LOGGER_VERSION_MAJOR}.${CONFIG_LOGGER_VERSION_MINOR}.${CONFIG_LOGGER_VERSION_PATCH}.${CONFIG_LOGGER_VERSION_BUILD}.dev")
-set_source_files_properties(${srcs} PROPERTIES COMPILE_FLAGS "-DDEBUG")
-write_file("${pdir}version.txt" "${ver}")
-else()
-if(CONFIG_LOGGER_BUILD_MODE_PROD)
-MESSAGE("Prod mode selected")
-set(ver "${CONFIG_LOGGER_VERSION_MAJOR}.${CONFIG_LOGGER_VERSION_MINOR}.${CONFIG_LOGGER_VERSION_PATCH}.${CONFIG_LOGGER_VERSION_BUILD}")
-set_source_files_properties(${srcs} PROPERTIES COMPILE_FLAGS "-DNDEBUG")
-write_file("${pdir}version.txt" "${ver}")
-endif()
-endif()
 
 set(srcs
+"lcd.c"
 "main.c"
 "dstat_screens.c"
 )
@@ -30,10 +18,6 @@ set(REQ gps_log)
 set(PRIVREQ driver esp_wifi
  display logger_common logger_context logger_button logger_vfs logger_str
  logger_config logger_ubx logger_adc logger_wifi logger_http)
-
-if(CONFIG_DISPLAY_USE_LVGL)
-set(srcs ${srcs} lcd.c)
-endif()
 
 if(CONFIG_BMX_ENABLE)
 set(srcs ${srcs} bmx.c)

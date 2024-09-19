@@ -237,9 +237,7 @@ export default {
     }
   },
   mounted() {
-    if(window.location.origin.includes('esp-logger')) {
-      axios.defaults.baseURL = window.location.origin + '/api/v1';
-    }
+    axios.defaults.baseURL = window.location.origin + '/api/v1';
     this.retrieveConfig();
   },
 };

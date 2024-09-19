@@ -365,9 +365,7 @@ export default {
     //this.retrieveFiles();
   },
   created() {
-    if(window.location.origin.includes('esp-logger')) {
-      axios.defaults.baseURL = window.location.origin + '/api/v1';
-    }
+    axios.defaults.baseURL = window.location.origin + '/api/v1';
     // watch the params of the route to fetch the data again
     this.$watch(
       () => this.$route.params,
