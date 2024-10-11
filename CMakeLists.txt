@@ -16,7 +16,7 @@ idf_build_set_property(COMPILE_OPTIONS "-Wno-unused-function" APPEND)
 idf_build_set_property(COMPILE_OPTIONS "-Wno-pointer-arith" APPEND) 
 
 if(NOT EXISTS "${CMAKE_SOURCE_DIR}/version.txt")
-write_file("${CMAKE_SOURCE_DIR}/version.txt" "1.0.4.4")
+write_file("${CMAKE_SOURCE_DIR}/version.txt" "1.0.4.5")
 endif()
 
 file(READ "${CMAKE_SOURCE_DIR}/version.txt" VER)

@@ -275,9 +275,9 @@ static int shut_down_gps(int no_sleep) {
     struct ubx_config_s *ubx = gps->ublox_config;
     if ((!ubx || !ubx->uart_setup_ok) && no_sleep) 
         return 0;
+    int ret = 0;
     if(!ubx)
         goto end;
-    int ret = 0;
     if(ubx->time_set)
             next_screen = CUR_SCREEN_SAVE_SESSION;
     if (ubx->ready) {
