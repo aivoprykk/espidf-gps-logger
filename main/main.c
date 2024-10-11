@@ -121,11 +121,15 @@ static uint32_t last_flush_time = 0;
 static uint16_t ubx_fail_count = 0;
 static uint8_t ubx_restart_requested = 0;
 
-#define L_FW_UPDATE_FIELDS 3
+// #define L_FW_UPDATE_FIELDS 3
 #define L_CFG_GROUP_FIELDS 4
 
- // 200ms before exec cb
-#define BUTTON_CB_WAIT_BEFORE 210000
+// 200ms before exec cb
+#if defined(CONFIG_DISPLAY_DRIVER_ST7789)
+#define BUTTON_CB_WAIT_BEFORE 300000U
+#else
+#define BUTTON_CB_WAIT_BEFORE 210000U
+#endif
 static bool button_down = false;
 static int button_press_mode = -1;
 static uint8_t button_clicks = 0;
@@ -690,7 +694,7 @@ static void button_timer_cb(void *arg) {
         else if (button_press_mode==0) { // just click
             if (cur_screen == CUR_SCREEN_FW_UPDATE){
                 ILOG(TAG, "[%s] fw update next choice %d", __func__, 1);
-                    if(fw_update_screen >= L_FW_UPDATE_FIELDS-1)
+                    if(fw_update_screen >= config_fw_update_item_count-1)
                         fw_update_screen = 0;
                     else
                         ++fw_update_screen;
@@ -699,15 +703,15 @@ static void button_timer_cb(void *arg) {
             else if(cur_screen == CUR_SCREEN_SETTINGS) {
                 ILOG(TAG, "[%s] settings next requested %d", __func__, 1);
                 if(cfg_screen == CFG_GROUP_GPS) {
-                    if(++gps_cfg_item >= L_CONFIG_GPS_FIELDS)
+                    if(++gps_cfg_item >= config_gps_item_count)
                         gps_cfg_item = 0;
                 }
                 else if(cfg_screen == CFG_GROUP_STAT_SCREENS) {
-                    if(++stat_screen_cfg_item >= L_CONFIG_STAT_FIELDS)
+                    if(++stat_screen_cfg_item >= config_stat_screen_item_count)
                         stat_screen_cfg_item = 0;
                 }
                 else if(cfg_screen == CFG_GROUP_SCREEN) {
-                    if(++screen_cfg_item >= L_CONFIG_SCREEN_FIELDS)
+                    if(++screen_cfg_item >= config_screen_item_count)
                         screen_cfg_item = 0;
                 }
                 else if(cfg_screen == CFG_GROUP_FW) {
@@ -720,7 +724,7 @@ static void button_timer_cb(void *arg) {
                 if(cur_screen == CUR_SCREEN_GPS_SPEED) {
                     ILOG(TAG, "[%s] gps info next screen requested, cur: %hhu", __func__, m_context.config->screen.speed_field);
                     m_context.config->screen.speed_field++;
-                    if (m_context.config->screen.speed_field > L_CONFIG_SPEED_FIELDS)
+                    if (m_context.config->screen.speed_field >= config_speed_field_item_count)
                         m_context.config->screen.speed_field = 1;
                     m_context.Field_choice = 1;
                 }
@@ -777,12 +781,12 @@ static void button_timer_cb(void *arg) {
         else
             lcd_ui_request_full_refresh(0);
     }
-    else {
+    else if(button_clicks==3) {
         ILOG(TAG, "[%s] Button triple click arrived, %s", __func__, button_press_mode == 3 ? "lllong" : button_press_mode == 2 ? "llong" : button_press_mode == 1 ? "long" : "short");
         ubx_config_t *ubx = m_context.gps.ublox_config;
         if(!(app_mode == APP_MODE_GPS && next_screen == CUR_SCREEN_SETTINGS)) {
             ILOG(TAG, "[%s] screen rotation change requested", __func__);
-            if(set_screen_cfg_item(m_config, 6, ubx->rtc_conf->hw_type)) {
+            if(set_screen_cfg_item(m_config, CGG_SCREEN_ITEM_ROTATION_POS, ubx->rtc_conf->hw_type)) {
                 g_context_rtc_add_config(&m_context_rtc, m_context.config);
                 display_set_rotation(m_context_rtc.RTC_screen_rotation);
             }
@@ -807,10 +811,16 @@ static void button_timer_cb(void *arg) {
                     }
                 }
                 else if(cfg_screen == CFG_GROUP_SCREEN) {
-                    if(set_screen_cfg_item(m_config, screen_cfg_item, hw_type)) {
+                    int changed = 0;
+                    if((changed = (set_screen_cfg_item(m_config, screen_cfg_item, hw_type)))) {
                         ILOG(TAG, "[%s] settings screen change requested", __func__);
                         g_context_rtc_add_config(&m_context_rtc, m_context.config);
-                        display_set_rotation(m_context_rtc.RTC_screen_rotation);
+                        if(changed == cfg_screen_rotation)
+                            display_set_rotation(m_context_rtc.RTC_screen_rotation);
+#if defined(CONFIG_DISPLAY_DRIVER_ST7789)
+                       if(changed == cfg_screen_brightness)
+                            driver_st7789_bl_set(m_context_rtc.RTC_screen_brightness);
+#endif
                     }
                 }
                 else if(cfg_screen == CFG_GROUP_FW) {
@@ -825,7 +835,17 @@ static void button_timer_cb(void *arg) {
                 // lcd_ui_request_fast_refresh(0);
             }
         }
-
+#if defined(CONFIG_DISPLAY_DRIVER_ST7789)
+        else {
+            ILOG(TAG, "[%s] Button 4 click arrived", __func__);
+            int changed = 0;
+            if((changed = (set_screen_cfg_item(m_config, CGG_SCREEN_ITEM_BRIGHTNESS_POS, ubx->rtc_conf->hw_type)))) {
+                g_context_rtc_add_config(&m_context_rtc, m_context.config);
+                if(changed == cfg_screen_brightness)
+                    driver_st7789_bl_set(m_context_rtc.RTC_screen_brightness);
+            }
+        }
+#endif
     }
     done:
     cancel_lcd_ui_delay();
@@ -854,9 +874,6 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
                     reset_alfa_stats(&gps->a500);
                 }
             } else {
-#ifdef CONFIG_DISPLAY_DRIVER_ST7789
-                m_context.display_bl_level_set = m_context.display_bl_level_set >= 100 ? 20 : m_context.display_bl_level_set + 20;
-#endif
                 /* if (ubx->ready && ubx->signal_ok) {
                     m_context.gpio12_screen_cur++;
                     if (m_context.gpio12_screen_cur >= m_context.gpio12_screen_count)
@@ -973,14 +990,6 @@ uint32_t screen_cb(void* arg) {
     //         m_context.low_bat_count = 10;
     //     }
     // }
-#if defined(CONFIG_DISPLAY_DRIVER_ST7789)
-            if(m_context.display_bl_level!=m_context.display_bl_level_set){
-                m_context.display_bl_level_set = m_context.display_bl_level_set > 100 ? 100 : m_context.display_bl_level_set;
-                m_context.display_bl_level = m_context.display_bl_level_set;
-                driver_st7789_bl_set(m_context.display_bl_level);
-                delay_ms(2);
-            }
-#endif  
     if(app_mode == APP_MODE_SLEEP){
         op->sleep_screen(dspl, 0);
         goto end;
@@ -990,7 +999,11 @@ uint32_t screen_cb(void* arg) {
         cur_screen = CUR_SCREEN_OFF_SCREEN;
         goto end;
     }
+#if defined(CONFIG_DISPLAY_DRIVER_ST7789)
+    if(lcd_count > 5){
+#else
     if(lcd_count > 1){
+#endif
         if(m_context.low_bat_count>=LOW_BAT_TRIGGER) {
             delay=op->update_screen(dspl, SCREEN_MODE_LOW_BAT, 0);
             goto end;
@@ -1127,7 +1140,7 @@ uint32_t screen_cb(void* arg) {
         }
     }
     end:
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2 || defined(DEBUG))
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2 || (!defined(CONFIG_DISPLAY_DRIVER_ST7789) && defined(DEBUG)))
     task_memory_info(__func__);
 #endif
     return delay;
@@ -1590,6 +1603,11 @@ static void config_changed_cb(const char *key) {
             lcd_ui_task_resume_for_times(1, -1, -1, false);
         }
     }
+#if defined(CONFIG_DISPLAY_DRIVER_ST7789)
+    if(strcmp(key, "screen_brightness")==0) {
+        driver_st7789_bl_set(m_config->screen_brightness);
+    }
+#endif
 }
 
 static void ctx_load_cb() {
@@ -1605,6 +1623,10 @@ static void ctx_load_cb() {
     delay_ms(50);
 
     config_load_json(m_config);
+#if defined(CONFIG_DISPLAY_DRIVER_ST7789)
+    if(m_context_rtc.RTC_screen_brightness != m_config->screen_brightness)
+        driver_st7789_bl_set(m_config->screen_brightness);
+#endif
     g_context_rtc_add_config(&m_context_rtc, m_config);
     if(display_get_rotation() != m_context_rtc.RTC_screen_rotation)
         display_set_rotation(m_context_rtc.RTC_screen_rotation);
@@ -1660,7 +1682,9 @@ static void setup(void) {
     display_init(&display);
     init_rtc();
     display_set_rotation(m_context_rtc.RTC_screen_rotation==-1 ? SCR_DEFAULT_ROTATION : m_context_rtc.RTC_screen_rotation);
-
+#if defined(CONFIG_DISPLAY_DRIVER_ST7789)
+    driver_st7789_bl_set(m_context_rtc.RTC_screen_brightness==-1 ? SCR_DEFAULT_BRIGHTNESS : m_context_rtc.RTC_screen_brightness);
+#endif
     if(!m_context_rtc.RTC_screen_auto_refresh){
        lcd_ui_task_pause();
     }

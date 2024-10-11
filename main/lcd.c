@@ -250,7 +250,7 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->screen.spee
     if(!config) return ESP_ERR_INVALID_STATE;
     uint8_t field = config->screen.speed_field;          // default is in config.txt
     const uint8_t bar_max = 240;                                  // 240 pixels is volledige bar
-    uint16_t bar_length = config->gps.bar_length * 1000 / bar_max;  // default 100% length = 1852 m
+    uint16_t bar_length = config->bar_length * 1000 / bar_max;  // default 100% length = 1852 m
     const uint8_t font_size = config->screen.speed_large_font;
     struct gps_context_s *gps = &m_context.gps;
     const struct gps_data_s * gps_data = &gps->Ublox;
@@ -263,10 +263,10 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->screen.spee
         //     field=8;//if run slower dan 95% of slowest run, show 1h result
         if ((gps_data->alfa_distance / 1000 < 350) && (gps->alfa_window < 100))
             field = 3;  // first 350 m after gibe  alfa screen !!
-        if (gps_data->alfa_distance / 1000 > config->gps.bar_length)
+        if (gps_data->alfa_distance / 1000 > config->bar_length)
             field = 4;  // run longer dan 1852 m, NM scherm !!
     } else if (config->screen.speed_field == 2) { // show Nautical Mile status
-        if (gps_data->run_distance / 1000 > config->gps.bar_length)
+        if (gps_data->run_distance / 1000 > config->bar_length)
             field = 4;  // if run longer dan 1852 m, NM scherm !!
     } else if (config->screen.speed_field == 7) { // show alpha status
         if ((gps_data->alfa_distance / 1000 < 350) && (gps->alfa_window < 100))
@@ -277,7 +277,7 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->screen.spee
         field = 8;
     } else if (config->screen.speed_field == 9) {  // 1 hour default, but first alfa, and if good run, last run
         field = 8;
-        if (gps_data->alfa_distance / 1000 > config->gps.bar_length)
+        if (gps_data->alfa_distance / 1000 > config->bar_length)
             field = 4;  // run longer dan 1852 m, NM scherm !!
         if (gps->S10.s_max_speed > gps->S10.display_speed[5])
             field = 1;  // if run faster then slowest run, show AVG & run
@@ -1171,7 +1171,7 @@ uint32_t lcd_ui_screen_draw() {
     uint32_t timer_delay_ms = lcd_lv_timer_handler();
     IMEAS_END(TAG, "[%s] .. %ld (lcd_lv_timer_handler req delay %lu), timer_handler took: %llu us",  __FUNCTION__, count, timer_delay_ms);
 #if !defined(CONFIG_DISPLAY_DRIVER_ST7789)
-#if LVGL_VERSION_MAJOR <= 8
+#if (LVGL_VERSION_MAJOR <= 8)
     _lv_disp_refr_timer(NULL);
 #else
 #include "../components/lvgl/src/core/lv_refr_private.h"
@@ -1194,7 +1194,10 @@ uint32_t lcd_ui_screen_draw() {
 
 void lcd_ui_task(void *args) {
     ILOG(TAG, "[%s] task starting", __FUNCTION__);
-    uint32_t task_delay_ms = lcd_lv_timer_handler(), now;
+    uint32_t task_delay_ms = lcd_lv_timer_handler();
+#if !defined(CONFIG_DISPLAY_DRIVER_ST7789)
+    uint32_t now;
+#endif
     while (lcd_ui_task_running) {
         if(xSemaphoreTake(lcd_refreshing_sem, portMAX_DELAY) == pdTRUE) {
             xSemaphoreGive(lcd_refreshing_sem);
@@ -1204,11 +1207,11 @@ void lcd_ui_task(void *args) {
             task_delay_ms = lcd_ui_screen_draw();
         }
         if(lcd_ui_task_running) {
-            now = get_millis();
 #if defined(CONFIG_DISPLAY_DRIVER_ST7789)
             delay_ms(task_delay_ms);
             UNUSED_PARAMETER(task_delay_ms);
 #else
+            now = get_millis();
             ms = now + task_delay_ms;
             while (lcd_ui_task_running && now < ms) {
                 delay_ms(L_LVGL_TASK_MAX_DELAY_MS);
@@ -1416,8 +1419,13 @@ void lcd_ui_start_task() {
     xTaskCreate(lcd_ui_task, "lcd_ui_task", LCD_UI_TASK_STACK_SIZE, NULL, 5, &lcd_ui_task_handle);
 }
 
+#if !defined(CONFIG_DISPLAY_DRIVER_ST7789)
 #define SHUT_DOWN_COUNTER_TIMES 300U
 #define SHUT_DOWN_COUNTER_DELAY 50U
+#else
+#define SHUT_DOWN_COUNTER_TIMES 10U
+#define SHUT_DOWN_COUNTER_DELAY 50U
+#endif
 void wait_for_ui_task() {
     ILOG(TAG, "[%s]", __func__);
     IMEAS_START();
