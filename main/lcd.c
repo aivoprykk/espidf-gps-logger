@@ -16,7 +16,7 @@
 #include "context.h"
 #include "dstat_screens.h"
 #include "logger_config.h"
-#include "str.h"
+#include "numstr.h"
 #include "gps_data.h"
 #include "ubx.h"
 #include "logger_wifi.h"

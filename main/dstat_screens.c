@@ -1,7 +1,7 @@
 #include "dstat_screens.h"
 
 #include "private.h"
-#include "str.h"
+#include "numstr.h"
 #include "context.h"
 
 extern struct context_s m_context;
