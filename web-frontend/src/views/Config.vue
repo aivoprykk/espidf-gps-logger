@@ -237,7 +237,7 @@ export default {
     }
   },
   mounted() {
-    axios.defaults.baseURL = window.location.origin + '/api/v1';
+    axios.defaults.baseURL = 'http://esp-9c40.local' + '/api/v1';
     this.retrieveConfig();
   },
 };

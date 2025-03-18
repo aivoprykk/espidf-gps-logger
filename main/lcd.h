@@ -1,8 +1,6 @@
 #ifndef AE577623_35A6_43A5_9250_F68AA337A0DF
 #define AE577623_35A6_43A5_9250_F68AA337A0DF
 
-#include <stdint.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -45,25 +43,14 @@ typedef enum {
 
 #define IS_STAT_SCREEN(screen) (screen >= SCREEN_MODE_SPEED_STATS_1 && screen <= SCREEN_MODE_SPEED_STATS_9)
 
-struct display_priv_s;
-typedef struct display_priv_s display_priv_t;
-struct display_s;
+#include <stdint.h>
+#include "sdkconfig.h"
+#if defined(CONFIG_DISPLAY_ENABLED)
+#include "display.h"
+#endif
 
-typedef struct display_op_s {
-    uint32_t (*sleep_screen)(const struct display_s *me, int choice);
-    uint32_t (*update_screen)(const struct display_s *me, const screen_mode_t screen_mode, void *arg);
-    void (*uninit)(struct display_s *me);
-} display_op_t;
-
-typedef struct display_s {
-    display_op_t *op;
-    display_priv_t *self;
-} display_t;
-
-struct display_s *display_init(struct display_s *me);
-void display_uninit(struct display_s *me);
-void lcd_timer_task(void *args);
-uint32_t lcd_lv_timer_handler();
+struct display_s *lcd_init();
+void lcd_uninit();
 
 #ifdef __cplusplus
 }

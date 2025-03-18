@@ -19,9 +19,9 @@
 [submodule "components/logger_http"]
 	path = components/logger_http
 	url = ssh://git@github.com/aivoprykk/logger_http.git
-[submodule "components/logger_str"]
-	path = components/logger_str
-	url = ssh://git@github.com/aivoprykk/logger_str.git
+[submodule "components/strutil"]
+	path = components/strutil
+	url = ssh://git@github.com/aivoprykk/strutil.git
 [submodule "components/logger_vfs"]
 	path = components/logger_vfs
 	url = ssh://git@github.com/aivoprykk/logger_vfs.git
@@ -43,3 +43,12 @@
 [submodule "components/bmx280"]
 	path = components/bmx280
 	url = ssh://git@10.10.19.80/git/bmx280.git
+[submodule "components/lvgl"]
+	path = components/lvgl
+	url = https://github.com/lvgl/lvgl.git
+[submodule "components/esp-idf-bmx280"]
+	path = components/esp-idf-bmx280
+	url = https://github.com/utkumaden/esp-idf-bmx280.git
+[submodule "components/esp_lcd_panel_rm67162"]
+	path = components/esp_lcd_panel_rm67162
+	url = ssh://git@10.10.19.80/git/esp_lcd_panel_rm67162.git

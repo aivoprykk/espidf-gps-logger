@@ -1,12 +1,15 @@
 # Name,   Type, SubType, Offset,   Size
 # Note: if you have increased the bootloader size, make sure to update the offsets to avoid overlap
 nvs,      data, nvs,     ,         0x4000
-nvs_keys, data, nvs_keys,,         4096
+nvs_keys, data, nvs_keys,,         0x1000
 otadata,  data, ota,     ,         0x2000
 phy_init, data, phy,     ,         0x1000
 emul_efuse,data,efuse,   ,         0x2000
-factory,  app,  factory, ,         2000K
-ota_0,    app,  ota_0,   ,         2000K
-ota_1,    app,  ota_1,   ,         2000K
-fatstore, data, fat,     ,         4000K
-littlestore,data,spiffs, ,         4000K
+# 2000K for the factory/ota_0/ota_1 app
+factory,  app,  factory, ,         0x1f4000
+ota_0,    app,  ota_0,   ,         0x1f4000
+ota_1,    app,  ota_1,   ,         0x1f4000
+## 10000K for fatstore, max out 16M flash storage
+fatstore, data, fat,     ,         0x9c4000
+## optional, 2000K for spiffs - if used, fatstore size should be reduced
+# spiffs,   data, spiffs,  ,         0x1f40000

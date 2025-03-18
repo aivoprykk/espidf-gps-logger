@@ -1,5 +1,5 @@
 /*!
-  * vue-router v4.4.0
+  * vue-router v4.4.5
   * (c) 2024 Eduardo San Martin Morote
   * @license MIT
   */
@@ -13,19 +13,19 @@
  */
 
 /**
-* @vue/reactivity v3.4.35
+* @vue/reactivity v3.5.6
 * (c) 2018-present Yuxi (Evan) You and Vue contributors
 * @license MIT
 **/
 
 /**
-* @vue/runtime-dom v3.4.35
+* @vue/runtime-dom v3.5.6
 * (c) 2018-present Yuxi (Evan) You and Vue contributors
 * @license MIT
 **/
 
 /**
-* @vue/shared v3.4.35
+* @vue/shared v3.5.6
 * (c) 2018-present Yuxi (Evan) You and Vue contributors
 * @license MIT
 **/

@@ -1,5 +1,5 @@
 {
-"hostname":"esp-logger",
+"hostname":"esp",
 "speed_unit":1,
 "sample_rate":10,
 "gnss":103,

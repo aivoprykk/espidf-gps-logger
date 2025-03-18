@@ -4,13 +4,13 @@
 #ifndef CE55CEAF_756D_4FCB_A3D6_C8246CDDEC4F
 #define CE55CEAF_756D_4FCB_A3D6_C8246CDDEC4F
 
-#include <stdint.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+#include "private.h"
 #if defined(CONFIG_BMX_ENABLE)
+#include <stdint.h>
 
 typedef struct {
     int32_t temp;

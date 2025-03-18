@@ -21,7 +21,9 @@
     >
     <template v-slot:top>
       <v-toolbar flat >
-        <v-toolbar-title>Files</v-toolbar-title>
+        <v-toolbar-title v-model="head.path">
+          {{getH()}}
+        </v-toolbar-title>
         <v-spacer></v-spacer>
         <v-col class="mx-auto" cols="3" sm="3">
         <span v-if="selected.length">
@@ -83,10 +85,10 @@
         -
       </span>
       <span v-if="item.size && item.size > 1024 * 1024">
-        {{ (item.size / 1024 / 1024) | 0 }} MB
+        {{ (item.size / 1024 / 1024) | 0 }} M
       </span>
       <span v-else-if="item.size && item.size > 1024">
-        {{ (item.size / 1024) | 0 }} KB
+        {{ (item.size / 1024) | 0 }} K
       </span>
       <span v-else>
         {{ item.size }}
@@ -151,6 +153,11 @@ export default {
   data() {
     return {
       files: [],
+      head:{
+        path: 'Files',
+        part_size: 0,
+        part_free_size: 0
+      },
       currentFile: undefined,
       progress: 0,
       loadTable: true,
@@ -182,6 +189,16 @@ export default {
     };
   },
   methods: {
+    getH() {
+      var i=this.head.total_space, j=0, k = this.head.free_space*100/this.head.total_space;
+      while(i>1000) {
+        i = i/1000;
+        j++;
+      }
+      if(i) i = i.toFixed(2);
+      if(k) k = k.toFixed(2);
+      return this.head.path + ' ' + i + (j==0?' bytes':j==1?' Kb':j==2?' Mb':' Gb') + ' (' + k + '% free)';
+    },
     isSelected(item) {
       return this.selected.includes(item.name);
     },
@@ -271,6 +288,11 @@ export default {
       let base = axios.defaults.baseURL.replace(/\/api.*/, (this.$route.fullPath + '/'));
       return base + name;
     },
+    getPaths() {
+      let id = this.$route.params.id;
+      let path = this.$route.fullPath;
+      return axios.get('/paths');
+    },
     getAll() {
       let id = this.$route.params.id;
       let path = this.$route.fullPath;
@@ -301,7 +323,17 @@ export default {
       this.getAll()
         .then((response) => {
           var d = response.data;
+          console.log(d);
           if (d && d.data && typeof d.data == 'object') {
+            if(d.path){
+              this.head.path = d.path;
+            }
+            if(d.total_space){
+              this.head.total_space = d.total_space;
+            }
+            if(d.free_space){
+              this.head.free_space = d.free_space;
+            }
             d = d.data;
           }
           this.items = d.map(this.getDisplayFile).filter(this.filterDisplayFile);
@@ -365,7 +397,7 @@ export default {
     //this.retrieveFiles();
   },
   created() {
-    axios.defaults.baseURL = window.location.origin + '/api/v1';
+    axios.defaults.baseURL = 'http://esp-9c40.local' + '/api/v1';
     // watch the params of the route to fetch the data again
     this.$watch(
       () => this.$route.params,

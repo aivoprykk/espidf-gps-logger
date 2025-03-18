@@ -1,10 +1,15 @@
 # The following lines of boilerplate have to be in your project's CMakeLists
 # in this exact order for cmake to work correctly
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.16)
 
 # (Not part of the boilerplate)
 # This example uses an extra component for common functions such as Wi-Fi and Ethernet connection.
 #list(APPEND EXTRA_COMPONENT_DIRS $ENV{IDF_PATH}/examples/common_components/protocol_examples_common)
+# set(PROTOCOLS_PATH "${CMAKE_SOURCE_DIR}/../esp-protocols")
+
+# set(EXTRA_COMPONENT_DIRS 
+#     "${PROTOCOLS_PATH}/common_components/linux_compat"
+#     "${PROTOCOLS_PATH}/components/mdns/tests/host_test/components")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
@@ -16,7 +21,7 @@ idf_build_set_property(COMPILE_OPTIONS "-Wno-unused-function" APPEND)
 idf_build_set_property(COMPILE_OPTIONS "-Wno-pointer-arith" APPEND) 
 
 if(NOT EXISTS "${CMAKE_SOURCE_DIR}/version.txt")
-write_file("${CMAKE_SOURCE_DIR}/version.txt" "1.0.4.5")
+write_file("${CMAKE_SOURCE_DIR}/version.txt" "1.0.4.6.dev")
 endif()
 
 file(READ "${CMAKE_SOURCE_DIR}/version.txt" VER)
@@ -47,10 +52,12 @@ set(PROJECT_VER "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VER
 set(PROJECT_VER_NUM "${PROJECT_VERSION_MAJOR}${PROJECT_VERSION_MINOR}${PROJECT_VERSION_PATCH}${PROJECT_VERSION_TWEAK}${PROJECT_MODE}")
 project(${PROJECT_NAME}-${PROJECT_VER_NUM})
 
-
-
 # Enable colors for compile output
 idf_build_set_property(COMPILE_OPTIONS "-fdiagnostics-color=always" APPEND)
+idf_build_get_property(lv_conf LV_CONF_PATH)
+if(lv_conf)
+idf_build_set_property(COMPILE_OPTIONS "-DLV_CONF_PATH=${lv_conf}" APPEND)
+endif()
 
 # Display Compile Time Information
 message(STATUS "--------------Compile Info------------")
@@ -62,6 +69,7 @@ message(STATUS "PROJECT_DIR = ${PROJECT_DIR}")
 message(STATUS "BUILD_DIR = ${BUILD_DIR}")
 message(STATUS "SDKCONFIG = ${SDKCONFIG}")
 message(STATUS "SDKCONFIG_DEFAULTS = ${SDKCONFIG_DEFAULTS}")
+message(STATUS "LV_CONF_PATH = ${lv_conf}")
 message(STATUS "CONFIG_LV_CONF_SKIP = ${CONFIG_LV_CONF_SKIP}")
 message(STATUS "---------------------------------------")
 message(STATUS "CMAKE_SOURCE_DIR = ${CMAKE_SOURCE_DIR}")

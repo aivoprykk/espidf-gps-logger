@@ -1,5 +1,5 @@
 {
-"hostname":"esp-logger",
+"hostname":"esp",
 "speed_unit":1,
 "sample_rate":10,
 "gnss":103,
@@ -24,8 +24,8 @@
 "timezone":3,
 "ubx_file":"gpslog",
 "sleep_info":"_mygps_",
-"ssid":"ma-ja-sa",
-"password":"ma-ja-sa",
-"ssid1":"ma-ja-sa_5g",
+"ssid":"majasa",
+"password":"Unim-1.Esimesed.2-Triibulised",
+"ssid1":"maarjakog",
 "password1":"ma-ja-sa"
 }

@@ -1,16 +1,27 @@
 #ifndef FAF00DDB_D330_462A_8A1C_425EBCE204D4
 #define FAF00DDB_D330_462A_8A1C_425EBCE204D4
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
 
 #include "sdkconfig.h"
+#if defined(CONFIG_LOGGER_USE_GLOBAL_LOG_LEVEL)
+#define C_LOG_LEVEL LOGGER_GLOBAL_LOG_LEVEL
+#else
+#define C_LOG_LEVEL CONFIG_LOGGER_COMMON_LOG_LEVEL
+#endif
+#include "common_log.h"
 
-#include <logger_common.h>
+#include "logger_common.h"
 
-#ifdef __cplusplus
-extern "C" {
+#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2 || CONFIG_LOGGER_GLOBAL_LOG_LEVEL < 2)
+extern const char * const app_mode_str[];
+extern const char * const cur_screen_str[];
 #endif
 
 #define MINIMUM_VOLTAGE 3.25
@@ -57,71 +68,26 @@ typedef struct v_settings_s {
 
 #define INCLUDE_pcTaskGetTaskName 1
 
-//#define STATIC_DEBUG        //indien gps test zonder snelheid en met wifi actief
-//#define DLS                  //set date on march 26 1:55, to test daylightsaving
+// #define STATIC_DEBUG        /// if gps test without speed and with wifi active
+// #define DLS                 /// set date on march 26 1:55, to test daylightsaving
+#ifdef CONFIG_LOGGER_BUTTON_ENABLED
+#define WAKE_UP_GPIO CONFIG_LOGGER_BUTTON_GPIO_0
 #if defined(CONFIG_LOGGER_BUTTON_GPIO_1)
-#define GPIO12_ACTIF        //if GPIO12 is used as wake up, standard GPIO12 function is not activated !!
+#define GPIO12_ACTIF        /// if GPIO12 is used as wake up, standard GPIO12 function is not activated !!
 #endif
-#define WAKE_UP_GPIO CONFIG_LOGGER_BUTTON_GPIO_0   //default 39
-#define EPOCH_2022 1640995200UL //start of the year 2022 1640995200
+#endif
+
+#ifndef WAKE_UP_GPIO
+#if defined(CONFIG_HAS_BOARD_LILYGO_EPAPER_T5)
+#define WAKE_UP_GPIO 39
+#else
+#define WAKE_UP_GPIO 14
+#endif
+#endif
+
+#define EPOCH_2022 1640995200UL /// start of the year 2022 1640995200
 
 uint32_t screen_cb(void* arg);
-
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL <= 2)
-
-#include "esp_timer.h"
-#include "esp_log.h"
-
-#endif
-
-#if defined(CONFIG_LOGGER_COMMON_LOG_LEVEL_TRACE) // "A lot of logs to give detailed information"
-
-#define DLOG LOG_INFO
-#define DMEAS_START MEAS_START
-#define DMEAS_END MEAS_END
-#define ILOG LOG_INFO
-#define IMEAS_START MEAS_START
-#define IMEAS_END MEAS_END
-#define WLOG LOG_INFO
-#define WMEAS_START MEAS_START
-#define WMEAS_END MEAS_END
-
-#elif defined(CONFIG_LOGGER_COMMON_LOG_LEVEL_INFO) // "Log important events"
-
-#define DLOG(a, b, ...) ((void)0)
-#define DMEAS_START() ((void)0)
-#define DMEAS_END(a, b, ...) ((void)0)
-#define ILOG LOG_INFO
-#define IMEAS_START MEAS_START
-#define IMEAS_END MEAS_END
-#define WLOG LOG_INFO
-#define WMEAS_START MEAS_START
-#define WMEAS_END MEAS_END
-
-#elif defined(CONFIG_LOGGER_COMMON_LOG_LEVEL_WARN) // "Log if something unwanted happened but didn't cause a problem"
-
-#define DLOG(a, b, ...) ((void)0)
-#define DMEAS_START() ((void)0)
-#define DMEAS_END(a, b, ...) ((void)0)
-#define ILOG(a, b, ...) ((void)0)
-#define IMEAS_START() ((void)0)
-#define IMEAS_END(a, b, ...) ((void)0)
-#define WLOG LOG_INFO
-#define WMEAS_START MEAS_START
-#define WMEAS_END MEAS_END
-
-#else // "Do not log anything"
-
-#define DLOG(a, b, ...) ((void)0)
-#define DMEAS_START() ((void)0)
-#define DMEAS_END(a, b, ...) ((void)0)
-#define ILOG(a, b, ...) ((void)0)
-#define IMEAS_START() ((void)0)
-#define IMEAS_END(a, b, ...) ((void)0)
-#define WLOG(a, b, ...) ((void)0)
-#define WMEAS_START() ((void)0)
-#define WMEAS_END(a, b, ...) ((void)0)
-#endif
 
 struct record_forwarder_s {
     const struct screen_f_s * cur;
@@ -134,32 +100,43 @@ struct push_forwarder_s {
     const char * title;
 };
 
-#if defined(CONFIG_DISPLAY_DRIVER_ST7789)
-#define LCD_UI_TASK_STACK_SIZE 5120
-#else
-#define LCD_UI_TASK_STACK_SIZE 3584
+typedef struct main_ctx_s {
+    struct context_s * ctx;
+    struct m_wifi_context * wifi_ctx;
+    struct logger_config_s * config;
+    app_mode_t app_mode;
+    cur_screens_t cur_screen;
+    cur_screens_t next_screen;
+    uint8_t stat_screen_count;
+    uint8_t fw_update_screen;
+    uint8_t cfg_screen;
+    uint8_t button_press_mode;
+    uint8_t low_bat_countdown;
+    uint8_t low_bat_count;
+    uint8_t record_done;
+    bool button_down;
+    uint8_t gps_cfg_item;
+    uint8_t stat_screen_cfg_item;
+    uint8_t screen_cfg_item;
+    uint8_t fw_cfg_item;
+    uint8_t app_mode_gps_on;
+    uint8_t app_mode_wifi_on;
+    uint8_t screen_auto_refresh;
+    uint8_t config_initialized;
+#ifdef CONFIG_USE_SD_CARD
+    uint64_t sd_space[2];
 #endif
-#define LCD_UI_TIMER_PERIOD_S 60
+#ifdef CONFIG_USE_FATFS
+    uint64_t fatfs_space[2];
+#endif
+} main_ctx_t;
 
-uint32_t lcd_ui_screen_draw();
-void lcd_ui_task(void *args);
-void cancel_lcd_ui_delay();
-uint32_t get_lcd_ui_count();
-void lcd_ui_start_task();
-void lcd_ui_task_pause();
-void lcd_ui_task_resume();
-uint16_t get_offscreen_counter();
-bool lcd_ui_task_is_paused();
-void lcd_ui_request_fast_refresh();
-void lcd_ui_request_full_refresh(bool force);
-void lcd_ui_task_resume_for_times(uint8_t times, int8_t fast_refresh_time, int8_t full_refresh_time, bool full_refresh_force);
-void lcd_ui_task_cancel_req_full_refresh();
-void lcd_ui_task_req_full_refresh(int8_t full_refresh_time, bool full_refresh_force);
-void lcd_ui_task_req_fast_refresh(int8_t full_refresh_time);
-void lcd_ui_task_cancel_req_fast_refresh();
+extern struct main_ctx_s m_app_ctx;
+
+#define LOW_BAT_TRIGGER 7
+
 void wifi_sta_conf_sync();
 static esp_err_t events_uninit();
-void wait_for_ui_task();
 
 // void lcd_ui_request_fast_refresh(bool force);
 
