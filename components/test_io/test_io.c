@@ -1,8 +1,6 @@
-/*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: Unlicense OR CC0-1.0
- */
+#include "test_io_private.h"
+#include "test_io.h"
+
 #include <stdio.h>
 #include <inttypes.h>
 #include <unistd.h>
@@ -10,16 +8,14 @@
 #include "driver/gpio.h"
 #include "esp_cpu.h"
 #include "esp_log.h"
-#include "sd_test_io.h"
 
-const static char *TAG = "SD_TEST";
-
+const static char *TAG = "test_pins";
 #define ADC_ATTEN_DB              ADC_ATTEN_DB_12
 #define GPIO_INPUT_PIN_SEL(pin)   (1ULL<<pin)
 
-#if CONFIG_ENABLE_ADC_FEATURE
-static bool adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle)
-{
+#if defined(CONFIG_ENABLE_ADC_FEATURE)
+static bool adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle) {
+    ILOG(TAG, "[%s]", __func__);
     adc_cali_handle_t handle = NULL;
     esp_err_t ret = ESP_FAIL;
     bool calibrated = false;
@@ -65,8 +61,8 @@ static bool adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_att
     return calibrated;
 }
 
-static void example_adc_calibration_deinit(adc_cali_handle_t handle)
-{
+static void example_adc_calibration_deinit(adc_cali_handle_t handle) {
+    ILOG(TAG, "[%s]", __func__);
 #if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
     ESP_ERROR_CHECK(adc_cali_delete_scheme_curve_fitting(handle));
 
@@ -75,8 +71,7 @@ static void example_adc_calibration_deinit(adc_cali_handle_t handle)
 #endif
 }
 
-static float get_pin_voltage(int i, adc_oneshot_unit_handle_t adc_handle, bool do_calibration, adc_cali_handle_t adc_cali_handle)
-{
+static float get_pin_voltage(int i, adc_oneshot_unit_handle_t adc_handle, bool do_calibration, adc_cali_handle_t adc_cali_handle) {
     int voltage = 0;
     int val;
     adc_oneshot_chan_cfg_t config = {
@@ -92,7 +87,7 @@ static float get_pin_voltage(int i, adc_oneshot_unit_handle_t adc_handle, bool d
 
     return (float)voltage/1000;
 }
-#endif //CONFIG_ENABLE_ADC_FEATURE
+#endif //defined(CONFIG_ENABLE_ADC_FEATURE)
 
 static uint32_t get_cycles_until_pin_level(int i, int level, int timeout) {
     uint32_t start = esp_cpu_get_cycle_count();
@@ -103,9 +98,8 @@ static uint32_t get_cycles_until_pin_level(int i, int level, int timeout) {
     return end - start;
 }
 
-void check_sd_card_pins(pin_configuration_t *config, const int pin_count)
-{
-    ESP_LOGI(TAG, "Testing SD pin connections and pullup strength");
+void check_pins(pin_configuration_t *config, const int pin_count) {
+    ILOG(TAG, "[%s]", __func__);
     gpio_config_t io_conf = {};
     for (int i = 0; i < pin_count; ++i) {
         io_conf.intr_type = GPIO_INTR_DISABLE;
@@ -140,19 +134,27 @@ void check_sd_card_pins(pin_configuration_t *config, const int pin_count)
         gpio_pullup_dis(config->pins[i]);
     }
 
-#if CONFIG_ENABLE_ADC_FEATURE
+#if defined(CONFIG_ENABLE_ADC_FEATURE)
 
     adc_oneshot_unit_handle_t adc_handle;
-    adc_oneshot_unit_init_cfg_t init_config = {
-        .unit_id = CONFIG_VFS_ADC_UNIT,
-    };
-    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config, &adc_handle));
-
+    for (int i = 0, k=0; i < 2; ++i, k = 0) {
+        for(int j = 0; j < pin_count; ++j) {
+            if (config->adc_units[j] == i) {
+                k=1;
+                break;
+            }
+        }
+        if (!k) continue;
+        adc_oneshot_unit_init_cfg_t init_config = { .unit_id = i };
+        ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config, &adc_handle));
+    }
+    
+    
     adc_cali_handle_t *adc_cali_handle = (adc_cali_handle_t *)malloc(sizeof(adc_cali_handle_t)*pin_count);
     bool *do_calibration = (bool *)malloc(sizeof(bool)*pin_count);
 
     for (int i = 0; i < pin_count; i++) {
-        do_calibration[i] = adc_calibration_init(CONFIG_VFS_ADC_VFS_UNIT, i, ADC_ATTEN_DB, &adc_cali_handle[i]);
+        do_calibration[i] = adc_calibration_init(config->adc_units[i], i, ADC_ATTEN_DB, &adc_cali_handle[i]);
     }
 
     printf("\n**** PIN voltage levels ****\n\n");
@@ -193,7 +195,7 @@ void check_sd_card_pins(pin_configuration_t *config, const int pin_count)
             printf("%1.1fV  ", voltage);
         }
         printf("\n");
-        gpio_set_direction(config->pins[i], GPIO_MODE_INPUT);
+        gpio_set_direction(config->pins[i], config->modes[i]);
     }
 
     printf("\n**** PIN cross-talk with weak pullup ****\n\n");
@@ -219,7 +221,7 @@ void check_sd_card_pins(pin_configuration_t *config, const int pin_count)
             gpio_pullup_dis(config->pins[j]);
         }
         printf("\n");
-        gpio_set_direction(config->pins[i], GPIO_MODE_INPUT);
+        gpio_set_direction(config->pins[i], config->modes[i]);
     }
 
     for (int i = 0; i < pin_count; ++i) {
@@ -227,5 +229,35 @@ void check_sd_card_pins(pin_configuration_t *config, const int pin_count)
             example_adc_calibration_deinit(adc_cali_handle[i]);
         }
     }
-#endif //CONFIG_ENABLE_ADC_FEATURE
+#endif //defined(CONFIG_ENABLE_ADC_FEATURE)
 }
+
+/* 
+const char* names[] = {"CLK", "CMD", "D0"};
+const int pins[] = {CONFIG_PIN_CLK,
+                    CONFIG_PIN_CMD,
+                    CONFIG_PIN_D0
+                    };
+const int pin_count = sizeof(pins)/sizeof(pins[0]);
+const int orig_modes[] = {GPIO_MODE_INPUT,
+                    GPIO_MODE_INPUT,
+                    GPIO_MODE_INPUT
+                    };
+#if defined(CONFIG_ENABLE_ADC_FEATURE)
+const int adc_channels[] = {CONFIG_ADC_C_PIN_CLK,
+                            CONFIG_ADC_C_PIN_CMD,
+                            CONFIG_ADC_C_PIN_D0
+                            };
+#endif //defined(CONFIG_ENABLE_ADC_FEATURE)
+adc_b_init(pins, names, orig_modes, adc_channels pin_count);
+ 
+    pin_configuration_t config = {
+        .names = names,
+        .pins = pins,
+        .modes = (const gpio_mode_t*)modes,
+    #if defined(CONFIG_ENABLE_ADC_FEATURE)
+        .adc_channels = adc_channels,
+        .adc_units = adc_units,
+    #endif
+    };
+*/

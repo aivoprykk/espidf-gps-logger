@@ -34,11 +34,6 @@
 #include "logger_wifi.h"
 #endif
 
-#define UI_INFO_SCREEN ui_InfoScreen
-#define UI_SPEED_SCREEN ui_SpeedScreen
-#define UI_STATS_SCREEN ui_StatsScreen
-
-
 typedef struct sleep_scr_s {
     float *data;
     const char *info;
@@ -174,23 +169,29 @@ static uint32_t _sleep_screen(const struct display_s *me, int choice) {
     lv_label_t *panel;
     // if (_lvgl_lock(50)) {
     display_state.current_screen_mode = SCREEN_MODE_SLEEP;
-    showSleepScreen();
-    statusbar_update();
-    uint8_t num = m_context_rtc.RTC_Sail_Logo > 0 ? m_context_rtc.RTC_Sail_Logo - 1 : 0;
-    const lv_img_dsc_t * img = sail_logo_img[num];
-    lv_img_set_src(ui_sleep_screen.bottom_img, img ? img : sail_logo_img[0]);
-    num = m_context_rtc.RTC_Board_Logo > 0 ? m_context_rtc.RTC_Board_Logo - 1 : 0;
-    img = board_logo_img[num];
-    lv_img_set_src(ui_sleep_screen.up_img, img ? img : board_logo_img[0]);
+    if(m_context_rtc.RTC_voltage_bat < MINIMUM_VOLTAGE) {
+        showBlankScreen(0);
+    } else if(m_context_rtc.RTC_voltage_bat < MINIMUM_VOLTAGE + 0.15) {
+        showLowBatScreen();
+    } else {
+        showSleepScreen();
+        statusbar_update();
+        uint8_t num = m_context_rtc.RTC_Sail_Logo > 0 ? m_context_rtc.RTC_Sail_Logo - 1 : 0;
+        const lv_img_dsc_t * img = sail_logo_img[num];
+        lv_img_set_src(ui_sleep_screen.bottom_img, img ? img : sail_logo_img[0]);
+        num = m_context_rtc.RTC_Board_Logo > 0 ? m_context_rtc.RTC_Board_Logo - 1 : 0;
+        img = board_logo_img[num];
+        lv_img_set_src(ui_sleep_screen.up_img, img ? img : board_logo_img[0]);
 
-    for(int i = 0; i < 6; i++) {
-        for(int j = 0; j < 2; j++) {
-            f2_to_char(*sleep_scr_info_fields[j][i].data, p);
-            lv_label_set_text(ui_sleep_screen.cells[i][j].title, p);
-            lv_label_set_text(ui_sleep_screen.cells[i][j].info, sleep_scr_info_fields[j][i].info);
+        for(int i = 0; i < 6; i++) {
+            for(int j = 0; j < 2; j++) {
+                f2_to_char(*sleep_scr_info_fields[j][i].data, p);
+                lv_label_set_text(ui_sleep_screen.cells[i][j].title, p);
+                lv_label_set_text(ui_sleep_screen.cells[i][j].info, sleep_scr_info_fields[j][i].info);
+            }
         }
+        lv_label_set_text(ui_sleep_screen.myid, m_context_rtc.RTC_Sleep_txt);
     }
-    lv_label_set_text(ui_sleep_screen.myid, m_context_rtc.RTC_Sleep_txt);
     // lcd_ui_request_full_refresh(0); // first screen load will cause full refresh
     display_state.current_screen_mode = display_state.old_screen_mode = SCREEN_MODE_SLEEP;
     ++display_state.display->count;
@@ -401,10 +402,12 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->screen.spee
         s[1] = avail_fields[63].value.num(); // m500 current run max speed
         var[0] = scr_fld[0][4][0];
         var[1] = scr_fld[0][4][1];
-        f1_to_char(s[0], val[0]);
-        if (s[1] > 100) {
+        if (s[0] > 100) 
+            f1_to_char(s[0], val[0]);
+        else
+            f2_to_char(s[0], val[0]);
+        if (s[1] > 100)
             f1_to_char(s[1], val[1]);
-        }
         else
             f2_to_char(s[1], val[1]);
     } else if (field == 6 || display_state.test_field == 6) { // 2 and 10 seconds stats
@@ -508,8 +511,8 @@ static void statusbar_time_cb(lv_timer_t *timer) {
             p += date_to_char(m_context_rtc.RTC_day, m_context_rtc.RTC_month, m_context_rtc.RTC_year, 0, p), *p = 0;
         }
         if(strcmp(lv_label_get_text(panel), &(tmp[0]))) {
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2)
-            printf("** (date)time: %s ** \n", tmp);
+#if (C_LOG_LEVEL < 2)
+            DLOG(TAG, "** [%s] (date)time: %s ** \n", __func__, tmp);
 #endif
             lv_label_set_text(panel, &(tmp[0]));
         }
@@ -584,9 +587,7 @@ static void statusbar_bat_cb(lv_timer_t *timer) {
                                                           : full < 101  ? LV_SYMBOL_BATTERY_FULL
                                                           : full < 110  ? LV_SYMBOL_CHARGE
                                                                         : LV_SYMBOL_USB;
-        r = lv_label_get_text(panel);
-        if(!r || memcmp(r, s, 3))
-            lv_label_set_text(panel, r);
+        lv_label_set_text(panel, s);
 // #if !defined(CONFIG_LCD_IS_EPD)
 //         lv_obj_set_style_text_color(panel, full>20 ? lv_color_hex(0xFFFFFF) : full>10 ? lv_color_hex(0xEECE44) : lv_color_hex(0xE32424), LV_PART_MAIN | LV_STATE_DEFAULT );
 //         lv_obj_set_style_text_opa(panel, 255, LV_PART_MAIN| LV_STATE_DEFAULT);
@@ -964,45 +965,45 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 goto link_for_screen_mode_speed_2;
                 break;
             case SCREEN_MODE_SPEED_STATS_1:
-                DLOG(TAG, "[%s] %s, stat 10s: %d", __func__, scr_mode_str, screen_mode);
+                DLOG(TAG, "[%s] %s, stat 10s: %d\n", __func__, scr_mode_str, screen_mode);
                 sc_data = &sc_screens[0];
                 break;
             case SCREEN_MODE_SPEED_STATS_2:
-                DLOG(TAG, "[%s] %s, stat 2s: %d", __func__, scr_mode_str, screen_mode);
+                DLOG(TAG, "[%s] %s, stat 2s: %d\n", __func__, scr_mode_str, screen_mode);
                 sc_data = &sc_screens[1];
                 break;
             case SCREEN_MODE_SPEED_STATS_3:
-                DLOG(TAG, "[%s] %s, stat 250m: %d", __func__, scr_mode_str, screen_mode);
+                DLOG(TAG, "[%s] %s, stat 250m: %d\n", __func__, scr_mode_str, screen_mode);
                 sc_data = &sc_screens[2];
                 break;
             case SCREEN_MODE_SPEED_STATS_4:
-                DLOG(TAG, "[%s] %s, stat 500m: %d", __func__, scr_mode_str, screen_mode);
+                DLOG(TAG, "[%s] %s, stat 500m: %d\n", __func__, scr_mode_str, screen_mode);
                 sc_data = &sc_screens[3];
                 break;
             case SCREEN_MODE_SPEED_STATS_5:
-                DLOG(TAG, "[%s] %s, stat 1852m: %d", __func__, scr_mode_str, screen_mode);
+                DLOG(TAG, "[%s] %s, stat 1852m: %d\n", __func__, scr_mode_str, screen_mode);
                 sc_data = &sc_screens[4];
                 break;
             case SCREEN_MODE_SPEED_STATS_6:
-                DLOG(TAG, "[%s] %s, stat A500: %d", __func__, scr_mode_str, screen_mode);
+                DLOG(TAG, "[%s] %s, stat A500: %d\n", __func__, scr_mode_str, screen_mode);
                 sc_data = &sc_screens[5];
                 break;
             case SCREEN_MODE_SPEED_STATS_7:
-                DLOG(TAG, "[%s] %s, stat 10sec avg: %d", __func__, scr_mode_str, screen_mode);
+                DLOG(TAG, "[%s] %s, stat 10sec avg: %d\n", __func__, scr_mode_str, screen_mode);
                     sc_data = &sc_screens[6];
                     break;
             case SCREEN_MODE_SPEED_STATS_8:
-                DLOG(TAG, "[%s] %s, stat stats: %d", __func__, scr_mode_str, screen_mode);
+                DLOG(TAG, "[%s] %s, stat stats: %d\n", __func__, scr_mode_str, screen_mode);
                 sc_data = &sc_screens[7];
                 break;
             case SCREEN_MODE_SPEED_STATS_9:
-                DLOG(TAG, "[%s] %s, stat alpha avg: %d", __func__, scr_mode_str, screen_mode);
+                DLOG(TAG, "[%s] %s, stat alpha avg: %d\n", __func__, scr_mode_str, screen_mode);
                 sc_data = &sc_screens[8];
                 break;
             case SCREEN_MODE_WIFI_START:
             case SCREEN_MODE_WIFI_AP:
             case SCREEN_MODE_WIFI_STATION:
-                DLOG(TAG, "[%s] %s, wifi %d", __func__, scr_mode_str, screen_mode);
+                DLOG(TAG, "[%s] %s, wifi %d\n", __func__, scr_mode_str, screen_mode);
                 display_state.update_delay = 600;
 #if defined(CONFIG_LOGGER_WIFI_ENABLED)
                 struct m_wifi_context *wctx = m_app_ctx.wifi_ctx;
@@ -1067,26 +1068,26 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
             uint8_t r, c, n, rows, cols;
             if (sc_data->num_fields == 6) {
 #if defined(CONFIG_SSD168X_PANEL_SSD1681)
-                DLOG(TAG, "[%s] stats panel: 6Row x 1Slot", __func__);
+                DLOG(TAG, "[%s] stats panel: 6Row x 1Slot\n", __func__);
                 rows = 6, cols = 1;
 #else
-                DLOG(TAG, "[%s] stats panel: 3Row x 2Slot", __func__);
+                DLOG(TAG, "[%s] stats panel: 3Row x 2Slot\n", __func__);
                 rows = 3, cols = 2;
 #endif
             } 
             else if (sc_data->num_fields == 4) {
 #if defined(CONFIG_SSD168X_PANEL_SSD1681)
-                DLOG(TAG, "[%s] stats panel: 4Row x 1Slot", __func__);
+                DLOG(TAG, "[%s] stats panel: 4Row x 1Slot\n", __func__);
                 rows = 4, cols = 1;
 #else
-                DLOG(TAG, "[%s] stats panel: 2Row x 2Slot", __func__);
+                DLOG(TAG, "[%s] stats panel: 2Row x 2Slot\n", __func__);
                 rows = 2, cols = 2;
 #endif
             } else if (sc_data->num_fields == 2) {
-                DLOG(TAG, "[%s] stats panel: 2Row x 1Slot", __func__);
+                DLOG(TAG, "[%s] stats panel: 2Row x 1Slot\n", __func__);
                 rows = 2, cols = 1;
             } else {
-                DLOG(TAG, "[%s] stats panel: 3Row x 1Slot", __func__);
+                DLOG(TAG, "[%s] stats panel: 3Row x 1Slot\n", __func__);
                 rows = 3, cols = 1;
             }
             ui_set_main_cnt_offset(&ui_stats_screen.screen, offset);
@@ -1142,6 +1143,7 @@ uint32_t screen_cb(void* arg) {
     main_ctx_t *ctx = &m_app_ctx;
     // const uint32_t lcd_count = get_lcd_ui_count();
     ILOG(TAG, "[%s] %ld app_mode: %s, cur_screen: %s, next_screen: %s", __func__, display_state.display->count, app_mode_str[ctx->app_mode], cur_screen_str[ctx->cur_screen], cur_screen_str[ctx->next_screen]);
+    DMEAS_START();
     // struct display_s *dspl = &display;
     uint32_t delay=0;
     if(!display_state.display || !display_state.display->op) {
@@ -1368,7 +1370,8 @@ uint32_t screen_cb(void* arg) {
 #endif
     }
     end:
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2 || (defined(CONFIG_LCD_IS_EPD) && defined(DEBUG)))
+    DMEAS_END(TAG, "[%s] took: %llu us",  __FUNCTION__);
+#if (C_LOG_LEVEL < 2 || defined(DEBUG))
     task_memory_info(__func__);
 #endif
     return delay;
@@ -1384,7 +1387,7 @@ struct display_s *lcd_init() {
     return display_state.display;
 }
 
-void lcd_uninit() {
+void lcd_deinit() {
     ILOG(TAG, "[%s]", __func__);
     display_uninit(display_state.display);
 }

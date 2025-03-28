@@ -10,8 +10,8 @@ extern "C" {
 #include <stdbool.h>
 
 #include "sdkconfig.h"
-#if defined(CONFIG_LOGGER_USE_GLOBAL_LOG_LEVEL)
-#define C_LOG_LEVEL LOGGER_GLOBAL_LOG_LEVEL
+#if (defined(CONFIG_LOGGER_USE_GLOBAL_LOG_LEVEL) && CONFIG_LOGGER_GLOBAL_LOG_LEVEL < CONFIG_LOGGER_COMMON_LOG_LEVEL)
+#define C_LOG_LEVEL CONFIG_LOGGER_GLOBAL_LOG_LEVEL
 #else
 #define C_LOG_LEVEL CONFIG_LOGGER_COMMON_LOG_LEVEL
 #endif
@@ -19,13 +19,15 @@ extern "C" {
 
 #include "logger_common.h"
 
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2 || CONFIG_LOGGER_GLOBAL_LOG_LEVEL < 2)
+#if (C_LOG_LEVEL < 2)
 extern const char * const app_mode_str[];
 extern const char * const cur_screen_str[];
 #endif
 
 #define MINIMUM_VOLTAGE 3.25
 #define LOW_BAT_COUNT 20
+#define BAT_LOW_TRESHOLD 3.4
+#define BAT_UP_TRESHOLD 4.0
 
 #ifndef MILLIS
 #define MILLIS(x) (int64_t)(x).tv_sec * 1000000L + (int64_t)(x).tv_usec;
@@ -136,7 +138,9 @@ extern struct main_ctx_s m_app_ctx;
 #define LOW_BAT_TRIGGER 7
 
 void wifi_sta_conf_sync();
-static esp_err_t events_uninit();
+static esp_err_t events_deinit();
+void deinit_button();
+void init_button();
 
 // void lcd_ui_request_fast_refresh(bool force);
 

@@ -50,7 +50,7 @@ typedef enum {
 #endif
 
 struct display_s *lcd_init();
-void lcd_uninit();
+void lcd_deinit();
 
 #ifdef __cplusplus
 }

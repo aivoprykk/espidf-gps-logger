@@ -1,0 +1,19 @@
+#ifndef C459F91D_5433_4E9A_811D_3D95E987F02D
+#define C459F91D_5433_4E9A_811D_3D95E987F02D
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include "sdkconfig.h"
+#if (defined(CONFIG_LOGGER_USE_GLOBAL_LOG_LEVEL) && CONFIG_LOGGER_GLOBAL_LOG_LEVEL < CONFIG_LOGGER_COMMON_LOG_LEVEL)
+#define C_LOG_LEVEL CONFIG_LOGGER_GLOBAL_LOG_LEVEL
+#else
+#define C_LOG_LEVEL CONFIG_LOGGER_COMMON_LOG_LEVEL
+#endif
+#include "common_log.h"
+
+#ifdef __cplusplus
+}
+#endif
+#endif /* C459F91D_5433_4E9A_811D_3D95E987F02D */

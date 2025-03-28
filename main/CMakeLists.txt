@@ -4,6 +4,7 @@ set(pdir ${CMAKE_CURRENT_SOURCE_DIR}/../)
 ##second stage !important! after component register
 
 set(srcs
+"hid.c"
 "lcd.c"
 "main.c"
 )

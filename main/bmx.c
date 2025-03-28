@@ -50,8 +50,6 @@ static esp_err_t bmx_read() {
 static void periodic_timer_callback(void *arg) {
     // while (bmx_run) {
         bmx_read();
-    //    task_memory_info("bmxTimer");
-    //     delay_ms(BMX_INTERVAL_SEC * 1000U);
     // }
     // vTaskDelete(NULL);
 }
