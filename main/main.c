@@ -161,23 +161,67 @@ static void low_to_sleep(uint64_t sleep_time) {
     gpio_set_level((gpio_num_t)13, 1);  // flash in deepsleep, CS stays HIGH!!
     gpio_deep_sleep_hold_en();
     esp_sleep_enable_timer_wakeup(uS_TO_S_FACTOR * sleep_time);
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] getup logger to sleep for every %d seconds.", __func__, (int)sleep_time);
+#endif
     esp_deep_sleep(uS_TO_S_FACTOR * sleep_time);
+}
+
+static esp_timer_handle_t low_bat_timer = 0;
+#define LOW_BAT_SEQUENCE_TIME_MS 20000
+void low_bat_timer_cb(void *arg) {
+    ILOG(TAG, "[%s]", __FUNCTION__);
+    if (low_bat_timer) {
+        esp_timer_stop(low_bat_timer);
+        if(esp_timer_delete(low_bat_timer)) {
+            ELOG(TAG, "[%s] esp_timer_delete failed", __FUNCTION__);
+        }
+        low_bat_timer = 0;
+    }
+    if(m_app_ctx.low_bat_countdown)
+        m_context.request_shutdown = 1;
+}
+
+void low_bat_start_sequence() {
+    ILOG(TAG, "[%s]", __FUNCTION__);
+    if(!m_app_ctx.low_bat_countdown) {
+        m_app_ctx.low_bat_countdown = get_millis() + LOW_BAT_SEQUENCE_TIME_MS;
+        const esp_timer_create_args_t low_bat_timer_args = {
+            .callback = &low_bat_timer_cb,
+            .name = "btn_tmr",
+            .arg = 0
+        };
+        if(!esp_timer_create(&low_bat_timer_args, &low_bat_timer)) {
+            if(esp_timer_start_once(low_bat_timer, LOW_BAT_SEQUENCE_TIME_MS * 1000)) {
+                ELOG(TAG, "[%s] esp_timer_start_once failed", __FUNCTION__);
+            }
+         }
+#if defined(CONFIG_DISPLAY_ENABLED)
+        if(!m_app_ctx.screen_auto_refresh && display_task_is_paused()) {
+            display_task_resume_for_times(1, -1, -1, false); // one partial refresh
+        }
+#endif
+    }
 }
 
 static void update_bat(void) {
 #if defined(CONFIG_LOGGER_ADC_ENABLED)
     m_context_rtc.RTC_voltage_bat = volt_read();
 #endif
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] computed:%.02f, required_min:%.02f\n", __FUNCTION__, m_context_rtc.RTC_voltage_bat, MINIMUM_VOLTAGE);
+#endif
     if(m_context_rtc.RTC_voltage_bat < MINIMUM_VOLTAGE) {
-        if(!m_app_ctx.low_bat_countdown) {
-            m_app_ctx.low_bat_countdown = get_millis() + 60000;  // 60 seconds
-        }
+#if (C_LOG_LEVEL < 3)
+        WLOG(TAG, "[%s] low battery detected, start shutdown sequence: %.02f", __FUNCTION__, m_context_rtc.RTC_voltage_bat);
+#endif
+        low_bat_start_sequence();
     }
     else if(m_app_ctx.low_bat_countdown) {
+#if (C_LOG_LEVEL < 3)
+        WLOG(TAG, "[%s] battery level restored, cancel shutdown sequence: %.02f", __FUNCTION__, m_context_rtc.RTC_voltage_bat);
+#endif
         m_app_ctx.low_bat_countdown = 0;
-        m_context.low_bat_count = 0;
     }
 }
 
@@ -192,10 +236,10 @@ static int wakeup_init() {
     esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
 
     // First screen update call from wakeup
-    if(wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) 
+    // if(wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) 
     // screen_cb(&display);
 
-    if (m_context_rtc.RTC_voltage_bat < MINIMUM_VOLTAGE) {
+    if (m_context_rtc.RTC_voltage_bat < MINIMUM_VOLTAGE && wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) {
         lowbat:
         m_app_ctx.app_mode = APP_MODE_SLEEP;
         esp_sleep_enable_ext0_wakeup(WAKE_UP_GPIO, 0);
@@ -396,11 +440,15 @@ void app_mode_wifi_handler(int verbose) {
     m_app_ctx.app_mode_wifi_on = 1;
     shut_down_gps(1);
     if (!wifi_context.s_wifi_initialized) {
+#if (C_LOG_LEVEL < 2)
         ILOG(TAG, "[%s] first turn wifi on", __FUNCTION__);
+#endif
         wifi_sta_conf_sync();
         wifi_init();
         wifi_mode(1, 1);
+#if (C_LOG_LEVEL < 2)
         ILOG(TAG, "[%s] wifi started.", __FUNCTION__);
+#endif
     }
 }
 #endif
@@ -478,13 +526,12 @@ static void gps_save_rtc() {
     m_context_rtc.RTC_R4_10s = avail_fields[19].value.num();
     m_context_rtc.RTC_R5_10s = avail_fields[20].value.num();
     
-    struct tm tms;
-    getLocalTime(&tms, 0);
-    m_context_rtc.RTC_year = ((tms.tm_year) + 1900);
-    m_context_rtc.RTC_month = ((tms.tm_mon) + 1);
-    m_context_rtc.RTC_day = (tms.tm_mday);
-    m_context_rtc.RTC_hour = (tms.tm_hour);
-    m_context_rtc.RTC_min = (tms.tm_min);
+    getLocalTime(&m_context_rtc.rtc_tm, 0);
+    // m_context_rtc.RTC_year = ((tms.tm_year) + 1900);
+    // m_context_rtc.RTC_month = ((tms.tm_mon) + 1);
+    // m_context_rtc.RTC_day = (tms.tm_mday);
+    // m_context_rtc.RTC_hour = (tms.tm_hour);
+    // m_context_rtc.RTC_min = (tms.tm_min);
 }
 
 #if defined(CONFIG_LOGGER_VFS_ENABLED)
@@ -598,6 +645,7 @@ static void logger_cfg_event_handler(void *handler_args, esp_event_base_t base, 
                 ILOG(TAG, "[%s] g %s d %hhu", __FUNCTION__, logger_config_event_strings[id], *((uint8_t*)event_data));
                 config_save_json(m_app_ctx.config);
                 break;
+#if (C_LOG_LEVEL < 3)
             case LOGGER_CONFIG_EVENT_CFG_GET:
                 ILOG(TAG, "[%s] c %s", __FUNCTION__, logger_config_event_strings[id]);
                 break;
@@ -609,6 +657,9 @@ static void logger_cfg_event_handler(void *handler_args, esp_event_base_t base, 
                 break;
             case LOGGER_CONFIG_EVENT_SAVE_FAIL:
                 ILOG(TAG, "[%s] c %s", __FUNCTION__, logger_config_event_strings[id]);
+                break;
+#endif
+            default:
                 break;
         }
 
@@ -686,6 +737,7 @@ static void gps_log_event_handler(void *handler_args, esp_event_base_t base, int
             case GPS_LOG_EVENT_LOG_FILES_OPEN_FAILED:
                 ILOG(TAG, "[%s] g %s", __FUNCTION__, gps_log_event_strings(id));
                 printfiles:
+#if (C_LOG_LEVEL < 2)
                 for(uint8_t i=0; i<SD_FD_END; i++) {
                     printf("** [%s] ", i==SD_GPX ? "GPX" : 
 #ifdef GPS_LOG_ENABLE_GPY
@@ -701,6 +753,7 @@ static void gps_log_event_handler(void *handler_args, esp_event_base_t base, int
                     }
                     printf("\n");
                 }
+#endif
                 break;
             case GPS_LOG_EVENT_LOG_FILES_SAVED:
                 ILOG(TAG, "[%s] g %s", __FUNCTION__, gps_log_event_strings(id));
@@ -741,7 +794,7 @@ static void gps_log_event_handler(void *handler_args, esp_event_base_t base, int
                     }
                     if(m_app_ctx.record_done < 240) {
                         showscr:
-                        display_task_resume_for_times(2, -1, -1, true);
+                        display_task_resume_for_times(2, -1, -1, false);
                     }
                 }
 #endif
@@ -799,9 +852,17 @@ static void adc_event_handler(void *handler_args, esp_event_base_t base, int32_t
                 }
 #endif
                 break;
+#if (C_LOG_LEVEL < 3)
             case ADC_EVENT_BATTERY_OK:
                 ILOG(TAG, "[%s] a %s", __FUNCTION__, adc_event_strings(id));
                 break;
+            case ADC_EVENT_CHARGE_STARTED:
+                ILOG(TAG, "[%s] a %s", __FUNCTION__, adc_event_strings(id));
+                break;
+            case ADC_EVENT_CHARGE_STOPPED:
+                ILOG(TAG, "[%s] a %s", __FUNCTION__, adc_event_strings(id));
+                break;
+#endif
             default:
                 // ILOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
                 break;
@@ -863,10 +924,21 @@ static void ui_event_handler(void *handler_args, esp_event_base_t base, int32_t 
                 ILOG(TAG, "[%s] d %s", __FUNCTION__, ui_event_strings(id));
                 break;
             case UI_EVENT_FLUSH_DONE:
-                ILOG(TAG, "[%s] d %s", __FUNCTION__, ui_event_strings(id));
+                display_incr_flush_count();
+#if (C_LOG_LEVEL < 2)
+                ILOG(TAG, "[%s] d %s flush_count:%lu buf_update_count:%lu", __FUNCTION__, ui_event_strings(id), display_get_flush_count(), display_get_buf_update_count());
+#endif
                 if(!m_app_ctx.screen_auto_refresh) {
-                    if(m_app_ctx.app_mode == APP_MODE_GPS && display_task_is_paused() && m_app_ctx.record_done < 240 && m_app_ctx.record_done != 25) {
-                        display_task_resume_for_times(1, -1, -1, true);
+                    if(m_app_ctx.app_mode == APP_MODE_SLEEP && display_get_flush_count() < 2)
+                        goto flush_again;
+                    else if(display_get_flush_count() < 3)
+                        goto flush_again;
+                    else if(m_app_ctx.app_mode == APP_MODE_GPS) {
+                        if(m_app_ctx.record_done < 240 && m_app_ctx.record_done != 25) {
+                            flush_again:
+                            if(display_task_is_paused())
+                                display_task_resume_for_times(1, -1, -1, false);
+                        }
                     }
                 }
             default:
@@ -876,69 +948,83 @@ static void ui_event_handler(void *handler_args, esp_event_base_t base, int32_t 
 }
 #endif
 
-/* static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *event_data) {
-    ESP_LOGI(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
-}
-
-static void logger_event_handler(void *arg, esp_event_base_t base, int32_t id, void *event_data) {
-    ESP_LOGI(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
-} */
-
 static esp_err_t events_init() {
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    //ESP_ERROR_CHECK(esp_event_handler_instance_register(ESP_EVENT_ANY_BASE, ESP_EVENT_ANY_ID, all_event_handler, NULL, NULL));
+    // if(esp_event_handler_instance_register(ESP_EVENT_ANY_BASE, ESP_EVENT_ANY_ID, all_event_handler, NULL, NULL)){
+    // WLOG(TAG, "[%s] %s", __FUNCTION__, "all_event_handler");
+    // }
 #if defined(CONFIG_LOGGER_VFS_ENABLED)
-    ESP_ERROR_CHECK(esp_event_handler_register(VFS_EVENT, ESP_EVENT_ANY_ID, vfs_event_handler, NULL));
+    if(esp_event_handler_register(VFS_EVENT, ESP_EVENT_ANY_ID, vfs_event_handler, NULL)){
+        WLOG(TAG, "[%s] event reg fail.", __FUNCTION__);
+    }
 #endif
 #if defined(CONFIG_LOGGER_HTTP_ENABLED)
-    ESP_ERROR_CHECK(esp_event_handler_register(OTA_AUTO_EVENT, ESP_EVENT_ANY_ID, ota_event_handler, NULL));
+    if(esp_event_handler_register(OTA_AUTO_EVENT, ESP_EVENT_ANY_ID, ota_event_handler, NULL)){
+        WLOG(TAG, "[%s] event reg fail.", __FUNCTION__);
+    }
 #endif
-    ESP_ERROR_CHECK(esp_event_handler_register(LOGGER_EVENT, ESP_EVENT_ANY_ID, logger_event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(LOGGER_CONFIG_EVENT, ESP_EVENT_ANY_ID, logger_cfg_event_handler, NULL));
+    if(esp_event_handler_register(LOGGER_EVENT, ESP_EVENT_ANY_ID, logger_event_handler, NULL)){
+        WLOG(TAG, "[%s] event reg fail.", __FUNCTION__);
+    }
+    if(esp_event_handler_register(LOGGER_CONFIG_EVENT, ESP_EVENT_ANY_ID, logger_cfg_event_handler, NULL)){
+        WLOG(TAG, "[%s] event reg fail.", __FUNCTION__);
+    }
 #if defined(CONFIG_UBLOX_ENABLED)
-    ESP_ERROR_CHECK(esp_event_handler_register(UBX_EVENT, ESP_EVENT_ANY_ID, ubx_event_handler, NULL));
+    if(esp_event_handler_register(UBX_EVENT, ESP_EVENT_ANY_ID, ubx_event_handler, NULL)){
+        WLOG(TAG, "[%s] event reg fail.", __FUNCTION__);
+    }
 #endif
 #if defined(CONFIG_GPS_LOG_ENABLED)
-    ESP_ERROR_CHECK(esp_event_handler_register(GPS_LOG_EVENT, ESP_EVENT_ANY_ID, gps_log_event_handler, NULL));
+    if(esp_event_handler_register(GPS_LOG_EVENT, ESP_EVENT_ANY_ID, gps_log_event_handler, NULL)){
+        WLOG(TAG, "[%s] event reg fail.", __FUNCTION__);
+    }
 #endif
 #if defined(CONFIG_LOGGER_ADC_ENABLED)
-    ESP_ERROR_CHECK(esp_event_handler_register(ADC_EVENT, ESP_EVENT_ANY_ID, adc_event_handler, NULL));
+    if(esp_event_handler_register(ADC_EVENT, ESP_EVENT_ANY_ID, adc_event_handler, NULL)){
+        WLOG(TAG, "[%s] event reg fail.", __FUNCTION__);
+    }
 #endif
 #if defined(CONFIG_LOGGER_WIFI_ENABLED)
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL));
+    if(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL)){
+        WLOG(TAG, "[%s] event reg fail.", __FUNCTION__);
+    }
 #endif
 #if defined(CONFIG_DISPLAY_ENABLED)
-    ESP_ERROR_CHECK(esp_event_handler_register(UI_EVENT, ESP_EVENT_ANY_ID, ui_event_handler, NULL));
+    if(esp_event_handler_register(UI_EVENT, ESP_EVENT_ANY_ID, ui_event_handler, NULL)){
+        WLOG(TAG, "[%s] event reg fail.", __FUNCTION__);
+    }
 #endif
     return ESP_OK;
 }
 
 static esp_err_t events_deinit() {
-    //ESP_ERROR_CHECK(esp_event_handler_instance_unregister(ESP_EVENT_ANY_BASE, ESP_EVENT_ANY_ID, all_event_handler));
+    // if(esp_event_handler_instance_unregister(ESP_EVENT_ANY_BASE, ESP_EVENT_ANY_ID, all_event_handler)){
+    //  WLOG(TAG, "[%s] %s", __FUNCTION__, "all_event_handler");
+    // }
 #if defined(CONFIG_LOGGER_VFS_ENABLED)
-    ESP_ERROR_CHECK(esp_event_handler_unregister(VFS_EVENT, ESP_EVENT_ANY_ID, vfs_event_handler));
+    esp_event_handler_unregister(VFS_EVENT, ESP_EVENT_ANY_ID, vfs_event_handler);
 #endif
 #if defined(CONFIG_LOGGER_HTTP_ENABLED)
-    ESP_ERROR_CHECK(esp_event_handler_unregister(OTA_AUTO_EVENT, ESP_EVENT_ANY_ID, ota_event_handler));
+    esp_event_handler_unregister(OTA_AUTO_EVENT, ESP_EVENT_ANY_ID, ota_event_handler);
 #endif
-    ESP_ERROR_CHECK(esp_event_handler_unregister(LOGGER_EVENT, ESP_EVENT_ANY_ID, logger_event_handler));
-    ESP_ERROR_CHECK(esp_event_handler_unregister(LOGGER_CONFIG_EVENT, ESP_EVENT_ANY_ID, logger_cfg_event_handler));
+    esp_event_handler_unregister(LOGGER_EVENT, ESP_EVENT_ANY_ID, logger_event_handler);
+    esp_event_handler_unregister(LOGGER_CONFIG_EVENT, ESP_EVENT_ANY_ID, logger_cfg_event_handler);
 #if defined(CONFIG_UBLOX_ENABLED)
-    ESP_ERROR_CHECK(esp_event_handler_unregister(UBX_EVENT, ESP_EVENT_ANY_ID, ubx_event_handler));
+    esp_event_handler_unregister(UBX_EVENT, ESP_EVENT_ANY_ID, ubx_event_handler);
 #endif
 #if defined(CONFIG_GPS_LOG_ENABLED)
-    ESP_ERROR_CHECK(esp_event_handler_unregister(GPS_LOG_EVENT, ESP_EVENT_ANY_ID, gps_log_event_handler));
+    esp_event_handler_unregister(GPS_LOG_EVENT, ESP_EVENT_ANY_ID, gps_log_event_handler);
 #endif
 #if defined(CONFIG_LOGGER_ADC_ENABLED)
-    ESP_ERROR_CHECK(esp_event_handler_unregister(ADC_EVENT, ESP_EVENT_ANY_ID, adc_event_handler));
+    esp_event_handler_unregister(ADC_EVENT, ESP_EVENT_ANY_ID, adc_event_handler);
 #endif
 #if defined(CONFIG_LOGGER_WIFI_ENABLED)
-    ESP_ERROR_CHECK(esp_event_handler_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler));
+    esp_event_handler_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler);
 #endif
 #if defined(CONFIG_DISPLAY_ENABLED)
-    ESP_ERROR_CHECK(esp_event_handler_unregister(UI_EVENT, ESP_EVENT_ANY_ID, ui_event_handler));
+    esp_event_handler_unregister(UI_EVENT, ESP_EVENT_ANY_ID, ui_event_handler);
 #endif
-    ESP_ERROR_CHECK(esp_event_loop_delete_default());
+    esp_event_loop_delete_default();
     return ESP_OK;
 }
 
@@ -1064,7 +1150,7 @@ static void setup(void) {
 #if defined(CONFIG_DISPLAY_ENABLED)
     ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, "Start screen periodic timer");
     if(!m_app_ctx.screen_auto_refresh){
-       display_task_resume_for_times(3, 0, 1, true);
+       display_task_resume_for_times(3, -1, -1, false);
     }
 #endif
     // appstage 1, structures initialized, start gps.
@@ -1089,32 +1175,23 @@ static void setup(void) {
 // static char rtbuf[BUFSIZ];
 void app_main(void) {
     ILOG(TAG, "[%s]", __FUNCTION__);
-    uint32_t loops = 0, millis = 0, bat_timeout = 0;
+    uint32_t loops = 0, millis = 0;
     // rtc_wdt_protect_off();
     setup();
     uint8_t verbose = 0;
     while (1) {
-        if(bat_timeout) bat_timeout = 0;
         if(loops%10==0) { // ~1sec
-            if(m_app_ctx.low_bat_countdown) {
-                millis = get_millis();
-                if(millis > m_app_ctx.low_bat_countdown) bat_timeout = 100;
-                WLOG(TAG, "[%s] %lu low bat count:%d, seconds left: %lu", __FUNCTION__, loops, m_context.low_bat_count, (bat_timeout == 100 ? 0 : (m_app_ctx.low_bat_countdown-millis)));
-                if(!bat_timeout && m_context.low_bat_count==LOW_BAT_TRIGGER) bat_timeout = 1;
-                if(m_context.low_bat_count == LOW_BAT_TRIGGER+2) m_context.low_bat_count=0; // increase low bat count
-                else m_context.low_bat_count++;
-            }
             update_bat();
         }
         if (m_context.request_restart) {
             m_app_ctx.app_mode = APP_MODE_RESTART;
             m_context.request_restart = 1;
         }
-        else if (m_context.request_shutdown || (m_app_ctx.low_bat_countdown && bat_timeout==100)) {
+        else if (m_context.request_shutdown) {
             m_app_ctx.app_mode = APP_MODE_SHUT_DOWN;
             m_context.request_shutdown = 1;
         }
-        if(m_context.request_shutdown || m_context.request_restart || bat_timeout) {
+        if(m_context.request_shutdown || m_context.request_restart) {
 #if defined(CONFIG_DISPLAY_ENABLED)
             if(!m_app_ctx.screen_auto_refresh && display_task_is_paused()) {
                 display_task_resume_for_times(1, -1, -1, false); // one partial refresh
@@ -1124,24 +1201,27 @@ void app_main(void) {
             m_context.request_restart = 0;
         }
         if(!m_app_ctx.config && m_context.sdOK) {
+#if (C_LOG_LEVEL < 2)
             ILOG(TAG, "[%s] config not loaded, do it as sdcard is initialized.", __FUNCTION__);
+#endif
             ctx_load_cb();
         }
-        if (loops++ >= 99) {
-#if (C_LOG_LEVEL < 3 || defined(DEBUG))
-#if (C_LOG_LEVEL < 2)
+        if (loops++ >= 49) {
+#if (C_LOG_LEVEL < 3)
+// #if (C_LOG_LEVEL < 2)
             tasks_memory_info();
-#else
-            task_memory_info(__func__);
-            memory_info_large(__func__);
-#endif
+            task_top();
+// #else
+//             task_memory_info(__func__);
+// #endif
 #endif
             loops=0;
             verbose = 1;
         } else {
             verbose = 0;
         }
-        task_app_mode_handler(verbose);
+        if(m_app_ctx.screen_auto_refresh || display_get_flush_count() > 1)
+            task_app_mode_handler(verbose);
         delay_ms(100);
     }
 #if defined(CONFIG_LOGGER_USE_WDT)

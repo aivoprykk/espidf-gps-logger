@@ -1,6 +1,10 @@
 .DS_Store
 .pio
 .vscode
+.cache
+.cproject
+.project
+.settings
 build
 managed_components
 local_components

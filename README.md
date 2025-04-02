@@ -1,5 +1,9 @@
 ESP-IDF GPS Logger
 =====================================
+
+Homepage: https://esplogger.majasa.ee/
+User manual: https://github.com/aivoprykk/espidf-gps-logger/ESP-Logger-Manual-v1-en.pdf
+
 Based on original [ESP-GPS-Logger](https://github.com/RP6conrad/ESP-GPS-Logger) but intended to move away from Arduino.
 
 Prerequirement is [PlatformIO](https://github.com/platformio/platformio-core) or [ESP-IDF](https://github.com/espressif/esp-idf). Also good to have [git](https://git-scm.com/downloads) in PATH.

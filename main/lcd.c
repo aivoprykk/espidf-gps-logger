@@ -160,7 +160,7 @@ size_t append_dots(char * p, uint8_t max_dots, uint8_t * cur_dots) {
 #define append_dots(p, max_dots, cur_dots) do{}while(0)
 #endif
 
-static void statusbar_update();
+// static void statusbar_update();
 
 static uint32_t _sleep_screen(const struct display_s *me, int choice) {
     ILOG(TAG, "[%s]", __func__);
@@ -169,13 +169,20 @@ static uint32_t _sleep_screen(const struct display_s *me, int choice) {
     lv_label_t *panel;
     // if (_lvgl_lock(50)) {
     display_state.current_screen_mode = SCREEN_MODE_SLEEP;
+#if defined(CONFIG_LCD_IS_EPD)
+    if(!m_app_ctx.screen_auto_refresh && display_get_flush_count() == 0) {
+        showSleepScreen();
+    }
+    else {
     if(m_context_rtc.RTC_voltage_bat < MINIMUM_VOLTAGE) {
         showBlankScreen(0);
-    } else if(m_context_rtc.RTC_voltage_bat < MINIMUM_VOLTAGE + 0.15) {
-        showLowBatScreen();
-    } else {
+    // } else if(m_context_rtc.RTC_voltage_bat < MINIMUM_VOLTAGE + 0.15) {
+    //     showLowBatScreen();
+    } 
+    else {
+#endif
         showSleepScreen();
-        statusbar_update();
+        // statusbar_update();
         uint8_t num = m_context_rtc.RTC_Sail_Logo > 0 ? m_context_rtc.RTC_Sail_Logo - 1 : 0;
         const lv_img_dsc_t * img = sail_logo_img[num];
         lv_img_set_src(ui_sleep_screen.bottom_img, img ? img : sail_logo_img[0]);
@@ -191,10 +198,13 @@ static uint32_t _sleep_screen(const struct display_s *me, int choice) {
             }
         }
         lv_label_set_text(ui_sleep_screen.myid, m_context_rtc.RTC_Sleep_txt);
+#if defined(CONFIG_LCD_IS_EPD)
     }
+    }
+#endif
     // lcd_ui_request_full_refresh(0); // first screen load will cause full refresh
-    display_state.current_screen_mode = display_state.old_screen_mode = SCREEN_MODE_SLEEP;
-    ++display_state.display->count;
+    // display_state.current_screen_mode = display_state.old_screen_mode = SCREEN_MODE_SLEEP;
+    // display_incr_buf_update_count();
     return 100;
 }
 
@@ -488,6 +498,7 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->screen.spee
 }
 
 static void statusbar_time_cb(lv_timer_t *timer) {
+    ILOG(TAG, "[%s]", __func__);
 #if defined(STATUS_PANEL_V1)
     ui_status_panel_t * statusbar = &ui_status_panel;
     if(!statusbar->parent) {
@@ -496,30 +507,32 @@ static void statusbar_time_cb(lv_timer_t *timer) {
 #else
     lv_statusbar_t * statusbar = (lv_statusbar_t *)ui_StatusPanel;
 #endif
+    struct tm *tm = &m_context_rtc.rtc_tm;
     char tmp[24]={0}, *p = tmp;
     lv_obj_t *panel;
     if ((panel = statusbar->time_label)) {
-        if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN))
-            lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
         if (statusbar->viewmode==0 || statusbar->viewmode == 2) {
-            struct tm tms;
-            memset(&tms, 0, sizeof(struct tm));
-            getLocalTime(&tms, 0);
-            time_to_char_hm(tms.tm_hour, tms.tm_min, p);
-        } else {
-            p += time_to_char_hm(m_context_rtc.RTC_hour, m_context_rtc.RTC_min, p), *p++ = ' ';
-            p += date_to_char(m_context_rtc.RTC_day, m_context_rtc.RTC_month, m_context_rtc.RTC_year, 0, p), *p = 0;
+            memset(tm, 0, sizeof(struct tm));
+            getLocalTime(tm, 0);
         }
-        if(strcmp(lv_label_get_text(panel), &(tmp[0]))) {
+        if(tm->tm_year > 70) {
+            p += time_to_char_hm(tm->tm_hour, tm->tm_min, p);
+            if(statusbar->viewmode==1) {
+                *p++ = ' ';
+                p += date_to_char(tm->tm_mday, tm->tm_mon+1, tm->tm_year+1900, 0, p), *p = 0;
+            }
+        }
 #if (C_LOG_LEVEL < 2)
-            DLOG(TAG, "** [%s] (date)time: %s ** \n", __func__, tmp);
+            DLOG(TAG, "** [%s] (date)time: %s {d: %d, m:%d, y:%d} ** \n", __func__, tmp, tm->tm_mday, tm->tm_mon, tm->tm_year);
 #endif
+        if(strcmp(lv_label_get_text(panel), &(tmp[0]))) {
             lv_label_set_text(panel, &(tmp[0]));
         }
     }
 }
 
 static void statusbar_temp_cb(lv_timer_t *timer) {
+    ILOG(TAG, "[%s]", __func__);
 #if defined(STATUS_PANEL_V1)
     ui_status_panel_t * statusbar = &ui_status_panel;
     if(!statusbar->parent) {
@@ -546,16 +559,13 @@ static void statusbar_temp_cb(lv_timer_t *timer) {
                 lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(panel, p);
         }
-#else
-        if(!lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
-            lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
-        }
 #endif
     }
 }
 
 static void statusbar_bat_cb(lv_timer_t *timer) {
-    #if defined(STATUS_PANEL_V1)
+    ILOG(TAG, "[%s]", __func__);
+#if defined(STATUS_PANEL_V1)
     ui_status_panel_t * statusbar = &ui_status_panel;
     if(!statusbar->parent) {
         return;
@@ -563,18 +573,19 @@ static void statusbar_bat_cb(lv_timer_t *timer) {
 #else
     lv_statusbar_t * statusbar = (lv_statusbar_t *)ui_StatusPanel;
 #endif
+    float bat = m_context_rtc.RTC_voltage_bat;
     char tmp[24], *p = tmp;
     const char *r;
     lv_obj_t *panel;
-    uint8_t full = m_context_rtc.RTC_voltage_bat > 4.8 ? 110 : m_context_rtc.RTC_voltage_bat >= 4.2 ? 101
+    uint8_t full = bat > 4.8 ? 110 
+                : bat >= 4.2 ? 101
 #if defined(CONFIG_LOGGER_ADC_ENABLED)
-                                                                                                    : calc_bat_perc_v(m_context_rtc.RTC_voltage_bat);
+                : calc_bat_perc_v(bat);
 #else
-                                                                                                    : 51;
+                : 51;
 #endif
     if ((panel = statusbar->bat_label)) {
-        if(full<100)
-            *p++=' ';
+        if(full<100) *p++=' ';
         p += bat_to_char(p, full > 100 ? 100 : full);
         r = lv_label_get_text(panel);
         if(!r || memcmp(r,&tmp[0],4))
@@ -582,11 +593,13 @@ static void statusbar_bat_cb(lv_timer_t *timer) {
     }
 
     if ((panel = statusbar->bat_image)) {
-        const char * s = full < 10 ? LV_SYMBOL_BATTERY_EMPTY : full < 20 ? LV_SYMBOL_BATTERY_1
-                                                          : full < 60   ? LV_SYMBOL_BATTERY_2
-                                                          : full < 101  ? LV_SYMBOL_BATTERY_FULL
-                                                          : full < 110  ? LV_SYMBOL_CHARGE
-                                                                        : LV_SYMBOL_USB;
+        const char * s = adc_on_ac() ? LV_SYMBOL_CHARGE
+                : full < 10  ? LV_SYMBOL_BATTERY_EMPTY
+                : full < 20  ? LV_SYMBOL_BATTERY_1
+                : full < 60  ? LV_SYMBOL_BATTERY_2
+                : full < 101 ? LV_SYMBOL_BATTERY_FULL
+                : full < 110 ? LV_SYMBOL_CHARGE
+                            : LV_SYMBOL_USB;
         lv_label_set_text(panel, s);
 // #if !defined(CONFIG_LCD_IS_EPD)
 //         lv_obj_set_style_text_color(panel, full>20 ? lv_color_hex(0xFFFFFF) : full>10 ? lv_color_hex(0xEECE44) : lv_color_hex(0xE32424), LV_PART_MAIN | LV_STATE_DEFAULT );
@@ -596,6 +609,7 @@ static void statusbar_bat_cb(lv_timer_t *timer) {
 }
 
 static void statusbar_gps_cb(lv_timer_t *timer) {
+    ILOG(TAG, "[%s]", __func__);
 #if defined(STATUS_PANEL_V1)
     ui_status_panel_t * statusbar = &ui_status_panel;
     if(!statusbar->parent) {
@@ -604,11 +618,18 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
 #else
     lv_statusbar_t * statusbar = (lv_statusbar_t *)ui_StatusPanel;
 #endif
-    const ubx_config_t *ubx_dev = m_app_ctx.ctx->gps.ubx_device;
+    const struct main_ctx_s *ctx = 0;
+    if(timer)
+        ctx = timer->user_data;
+    else
+        ctx = &m_app_ctx;
+    if(!ctx || ! ctx->ctx || !ctx->ctx->gps.ubx_device) return;
+    const ubx_config_t *ubx_dev = ctx->ctx->gps.ubx_device;
     lv_obj_t *panel;
     if ((panel = statusbar->gps_image)) {
         char tmp[24]={0}, *p = tmp;
-        if (ubx_dev && ubx_dev->is_on) {
+        uint8_t numsat = ubx_dev->ubx_msg.navPvt.numSV;
+        if (ctx->app_mode == APP_MODE_GPS && ubx_dev->is_on) {
             if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
                 lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
             }
@@ -619,9 +640,9 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
             return;
         }
         //if(statusbar->viewmode==2) { 
-            if (!ubx_dev || !ubx_dev->ready){
-                memcpy(p, "-n-", 3);
-            }
+            // if (!ubx_dev || !ubx_dev->ready){
+            //     memcpy(p, "-n-", 3);
+            // }
             // else if(!ubx_dev->signal_ok) {
             //     uint8_t qp = gblink;
             //     memcpy(p, "gps   ", 6);
@@ -632,8 +653,10 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
             //     }
             //     gblink = gblink==3 ? 0 : gblink+1;
             // }
-            else {
-                p += xltoa(ubx_dev->ubx_msg.navPvt.numSV, p);
+            
+            // else 
+            if(numsat > 0) {
+                p += xltoa(numsat, p);
                 *p = 0;
             }
             p = lv_label_get_text(panel);
@@ -647,7 +670,7 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
     //             lv_label_set_text(panel, LV_SYMBOL_GPS);
     //         }
         }
-        // if (ubx_dev->ubx_msg.navPvt.numSV >= 4) {
+        // if (numsat >= 4) {
         //     lv_obj_set_style_img_recolor(panel, lv_color_hex(0xA9B7B9), LV_PART_MAIN | LV_STATE_DEFAULT);
         //     lv_obj_set_style_img_recolor_opa(panel, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
         // } else if (ubx_dev->ready) {
@@ -669,18 +692,72 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
     // }
 }
 
-static void statusbar_update() {
-    // battery //
-    statusbar_bat_cb(0);
-    // // time //
-    statusbar_time_cb(0);
-    // // temp //
-    statusbar_temp_cb(0);
-    // // sdcard image //
-    // statusbar_sdcard_cb(0);
-    // // gps/wifi image //
-    statusbar_gps_cb(0);
+lv_timer_t * gps_timer = 0;
+lv_timer_t * time_timer = 0;
+lv_timer_t * bat_timer = 0;
+lv_timer_t * temp_timer = 0;
+
+void update_lv_timers() {
+    ILOG(TAG, "[%s]", __func__);
+    if(m_app_ctx.app_mode == APP_MODE_SLEEP) {
+        statusbar_time_cb(0);
+        statusbar_bat_cb(0);
+    }
+    else {
+        if(!gps_timer && m_app_ctx.app_mode == APP_MODE_GPS) {
+            gps_timer = lv_timer_create(statusbar_gps_cb, 1000, &m_app_ctx);
+        }
+        else if(gps_timer && m_app_ctx.app_mode != APP_MODE_GPS) {
+            lv_timer_del(gps_timer);
+            gps_timer = 0;
+        }
+        if(!time_timer) {
+            statusbar_time_cb(0);
+            time_timer = lv_timer_create(statusbar_time_cb, 1000, &m_app_ctx);
+        }
+        if(!bat_timer) {
+            statusbar_bat_cb(0);
+            bat_timer = lv_timer_create(statusbar_bat_cb, 1000, &m_app_ctx);
+        }
+#if defined(CONFIG_BMX_ENABLE)
+        if(!temp_timer) temp_timer = lv_timer_create(statusbar_temp_cb, 1000, 0);
+#endif
+    }
 }
+
+void stop_lv_timers() {
+    if(gps_timer) {
+        lv_timer_del(gps_timer);
+        gps_timer = 0;
+    }
+    if(time_timer) {
+        lv_timer_del(time_timer);
+        time_timer = 0;
+    }
+    if(bat_timer) {
+        lv_timer_del(bat_timer);
+        bat_timer = 0;
+    }
+#if defined(CONFIG_BMX_ENABLE)
+    if(temp_timer) {
+        lv_timer_del(temp_timer);
+        temp_timer = 0;
+    }
+#endif
+}
+
+// static void statusbar_update() {
+//     // battery //
+//     statusbar_bat_cb(0);
+//     // // time //
+//     statusbar_time_cb(0);
+//     // // temp //
+//     statusbar_temp_cb(0);
+//     // // sdcard image //
+//     // statusbar_sdcard_cb(0);
+//     // // gps/wifi image //
+//     statusbar_gps_cb(0);
+// }
 
 static void update_sat_count(const struct ubx_config_s *ubx_dev) {
     if(!ubx_dev) return;
@@ -689,7 +766,9 @@ static void update_sat_count(const struct ubx_config_s *ubx_dev) {
     memset(&(display_state.sat_count), 0, sizeof(sat_count_t));
     for(uint8_t i=0; i < nav_sat->numSvs; i++) {
         sat = &nav_sat->sat[i];
+#if (C_LOG_LEVEL < 2)
         DLOG(TAG, "sat[%hhu]: %hhu, %hhu, %hhu, %hhu, %hu, %lu %lu %lu\n", i, sat->gnssId, sat->svId, sat->cno, sat->elev, sat->azim, sat->flags, (sat->flags & 0x08), (sat->flags & 0x07));
+#endif
         if((sat->flags & 0x08) == 0 || (sat->flags & 0x07) < 4)
             continue;
         switch(sat->gnssId) {
@@ -718,7 +797,9 @@ static void update_sat_count(const struct ubx_config_s *ubx_dev) {
                 break;
         }
     }
+#if (C_LOG_LEVEL < 2)
     ILOG(TAG, "gnss: %hhu, count: %hhu, G:%d, S:%d, E:%d, B:%d, Q:%d, R:%d, N:%d", ubx_dev->rtc_conf->gnss, nav_sat->numSvs, display_state.sat_count.gps, display_state.sat_count.sbas, display_state.sat_count.galileo, display_state.sat_count.beidou, display_state.sat_count.qzss, display_state.sat_count.glonass, display_state.sat_count.navic);
+#endif
 }
 
 static size_t update_gps_info_row_str(const struct ubx_config_s *ubx_dev, char * p) {
@@ -727,6 +808,10 @@ static size_t update_gps_info_row_str(const struct ubx_config_s *ubx_dev, char *
     if(ubx_dev->config_progress) {
         memcpy(pc, "initializing", 12), pc += 12;
     } else if(ubx_dev->ready) {
+        if(ubx_dev->rtc_conf->hw_type == UBX_HW_TYPE_DEFAULT) {
+            memcpy(pc, "gps not found", 13), pc += 13;
+            goto end;
+        }
         update_sat_count(ubx_dev);
         uint8_t gnss = ubx_dev->rtc_conf->gnss;
         pc += xultoa(ubx_dev->ubx_msg.navPvt.numSV, pc);
@@ -755,6 +840,7 @@ static size_t update_gps_info_row_str(const struct ubx_config_s *ubx_dev, char *
     else {
         memcpy(pc, "gps not ready", 13), pc += 13;
     }
+    end:
     *pc = 0;
     return pc - p;
 }
@@ -777,7 +863,10 @@ static size_t update_gps_desc_row_str(const struct gps_context_s * gps, char * p
 }
 
 static uint32_t _update_screen(const struct display_s *me, const screen_mode_t screen_mode, void *arg) {
-    ILOG(TAG, "[%s] %ld mode: %d", __func__, display_state.display->count, screen_mode);
+    uint32_t buf_update_count = display_get_buf_update_count();
+#if (C_LOG_LEVEL < 3)
+    ILOG(TAG, "[%s] buf_update_count:%ld mode: %d", __func__, buf_update_count, screen_mode);
+#endif
     uint32_t ret = 0;
     UNUSED_PARAMETER(ret);
     if(display_refresh_lock(portMAX_DELAY) == pdTRUE) {
@@ -785,7 +874,7 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
         char str[24] = {0}, *p = str, str1[32]={0}, *pb = str1, str2[32]={0}, *pc = str2;
         bool is_gps_stat_screen = (screen_mode > 0 && screen_mode < 10);
         display_state.update_delay = 500;
-        // ESP_LOGI(TAG, "update screen: mode:%" PRIu8 ", update nr:%lu", screen_mode, display_state.display->count);
+        // ESP_LOGI(TAG, "update screen: mode:%" PRIu8 ", update nr:%lu", screen_mode, buf_update_count);
         float gpsspd;
         int state = (int)arg;
         lv_obj_t *panel, *parent;
@@ -825,18 +914,19 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 gpsstr = ubx_dev ? ubx_chip_str(ubx_dev) : 0;
                 if(!gpsstr) {
                     p=str;
-                    img_src = &near_me_disabled_bold_48px;
                     memcpy(p, "NO GPS YET", 6), p += 6;
                 }
                 else if(!strcmp(gpsstr, "UNKNOWN")) {
                     p=str;
-                    img_src = &near_me_disabled_bold_48px;
-                    memcpy(p, "GPS -", 5), p += 5;
+                    memcpy(p, "GPS", 3), p += 3;
+                    if(ubx_dev->ready && ubx_dev->rtc_conf->hw_type == UBX_HW_TYPE_DEFAULT) {
+                        img_src = &near_me_disabled_bold_48px;
+                        memcpy(p, " -", 2), p += 2;
+                    }
                 }
                 else {
                     p += strlen(gpsstr);
                     memcpy(&str[0], gpsstr, p-&str[0]);
-                    img_src = &near_me_bold_48px;
                     *p++ = '@';
                     p += xltoa(ubx_dev->rtc_conf->output_rate, p);
                     memcpy(p, "Hz", 2), p += 2;
@@ -851,7 +941,7 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 }
                 ui_set_main_cnt_offset(&ui_info_screen.screen, offset);
                 showGpsScreen(&str[0], &display_state.bat_status_str[0], &display_state.gps_status_str[0], img_src, display_state.gps_image_angle);
-                statusbar_update();
+                // statusbar_update();
 
 // #if !defined(CONFIG_LCD_IS_EPD)
 //                 if(screen_mode==SCREEN_MODE_GPS_INIT) {
@@ -891,8 +981,6 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 break;
             case SCREEN_MODE_SHUT_DOWN:
                 ui_flush_screens(&ui_init_screen.screen);
-                float session_time = avail_fields[59].value.num();
-                float distance = avail_fields[41].value.num();
                 const char *title = m_app_ctx.ctx->request_restart ? "Reboot device" : m_app_ctx.ctx->Shut_down_Save_session ? 0 : "Going to sleep";
                 memcpy(&str[0], title ? title : "Save session", title ? strlen(title) : 12), p += title ? strlen(title) : 12;
 #ifdef USE_DOTS_COUNTER
@@ -904,6 +992,8 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 } else {
                     //current_screen_mode = SCREEN_MODE_OFF_SCREEN;
                     if(!title) {
+                        float session_time = avail_fields[59].value.num();
+                        float distance = avail_fields[41].value.num();
                         memcpy(pb, "Time: ", 6), pb += 6;
                         sec_to_hms_str(session_time, pb);
                         memcpy(pc, "Distance: ", 10), pc += 10;
@@ -922,15 +1012,24 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                     500;
                 break;
             case SCREEN_MODE_BOOT:
-                ui_flush_screens(&ui_init_screen.screen);
-                display_request_full_refresh(0); // first screen load will cause full refresh
+                // ui_flush_screens(&ui_init_screen.screen);
                 // current_screen_mode = SCREEN_MODE_BOOT;
-                memcpy(p, "Booting", 7), p += 7;
-#ifdef USE_DOTS_COUNTER
-                append_dots(p, 3, &m_app_ctx.ctx->dots_counter);
+#if defined(CONFIG_LCD_IS_EPD)
+                 if(m_app_ctx.screen_auto_refresh || display_get_flush_count() > 0) {
 #endif
-                showBootScreen(&str[0]);
-                if (display_state.display->count<2) display_state.update_delay = 100;
+                    memcpy(p, "Booting", 7), p += 7;
+#ifdef USE_DOTS_COUNTER
+                    append_dots(p, 3, &m_app_ctx.ctx->dots_counter);
+#endif
+                    showBootScreen(&str[0]);
+#if defined(CONFIG_LCD_IS_EPD)
+                }
+                 else {
+                    // display_request_full_refresh(0); // first screen load will cause full refresh
+                    showBlankScreen(0);
+                 }
+#endif
+                if (buf_update_count < 2) display_state.update_delay = 100;
                 break;
             case SCREEN_MODE_SPEED_1:
             link_for_screen_mode_speed_2:
@@ -958,52 +1057,72 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 panel = ui_speed_screen.speed;
                 lv_label_set_text(panel, p);
                 speed_info_bar_update();
-                statusbar_update();
+                // statusbar_update();
 
                 break;
             case SCREEN_MODE_SPEED_2:
                 goto link_for_screen_mode_speed_2;
                 break;
             case SCREEN_MODE_SPEED_STATS_1:
+#if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] %s, stat 10s: %d\n", __func__, scr_mode_str, screen_mode);
+#endif
                 sc_data = &sc_screens[0];
                 break;
             case SCREEN_MODE_SPEED_STATS_2:
+#if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] %s, stat 2s: %d\n", __func__, scr_mode_str, screen_mode);
+#endif
                 sc_data = &sc_screens[1];
                 break;
             case SCREEN_MODE_SPEED_STATS_3:
+#if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] %s, stat 250m: %d\n", __func__, scr_mode_str, screen_mode);
+#endif
                 sc_data = &sc_screens[2];
                 break;
             case SCREEN_MODE_SPEED_STATS_4:
+#if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] %s, stat 500m: %d\n", __func__, scr_mode_str, screen_mode);
+#endif
                 sc_data = &sc_screens[3];
                 break;
             case SCREEN_MODE_SPEED_STATS_5:
+#if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] %s, stat 1852m: %d\n", __func__, scr_mode_str, screen_mode);
+#endif
                 sc_data = &sc_screens[4];
                 break;
             case SCREEN_MODE_SPEED_STATS_6:
+#if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] %s, stat A500: %d\n", __func__, scr_mode_str, screen_mode);
+#endif
                 sc_data = &sc_screens[5];
                 break;
             case SCREEN_MODE_SPEED_STATS_7:
+#if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] %s, stat 10sec avg: %d\n", __func__, scr_mode_str, screen_mode);
+#endif
                     sc_data = &sc_screens[6];
                     break;
             case SCREEN_MODE_SPEED_STATS_8:
+#if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] %s, stat stats: %d\n", __func__, scr_mode_str, screen_mode);
+#endif
                 sc_data = &sc_screens[7];
                 break;
             case SCREEN_MODE_SPEED_STATS_9:
+#if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] %s, stat alpha avg: %d\n", __func__, scr_mode_str, screen_mode);
+#endif
                 sc_data = &sc_screens[8];
                 break;
             case SCREEN_MODE_WIFI_START:
             case SCREEN_MODE_WIFI_AP:
             case SCREEN_MODE_WIFI_STATION:
+#if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] %s, wifi %d\n", __func__, scr_mode_str, screen_mode);
+#endif
                 display_state.update_delay = 600;
 #if defined(CONFIG_LOGGER_WIFI_ENABLED)
                 struct m_wifi_context *wctx = m_app_ctx.wifi_ctx;
@@ -1027,7 +1146,7 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 ui_set_main_cnt_offset(&ui_info_screen.screen, offset);
                 
                 showWifiScreen(&str[0], &str1[0], &str2[0]);
-                statusbar_update();
+                // statusbar_update();
 #if !defined(CONFIG_LCD_IS_EPD)
                 lv_obj_set_style_img_recolor(ui_info_screen.info_img, lv_color_hex(0x104951), LV_PART_MAIN | LV_STATE_DEFAULT);
                 lv_obj_set_style_img_recolor_opa(ui_info_screen.info_img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1060,6 +1179,9 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                     showSettingsScreen("Settings","-","-");
                 }
                 break;
+            case SCREEN_MODE_SLEEP:
+                _sleep_screen(display_state.display, 0);
+                break;
             default:
                 break;
         }
@@ -1068,26 +1190,38 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
             uint8_t r, c, n, rows, cols;
             if (sc_data->num_fields == 6) {
 #if defined(CONFIG_SSD168X_PANEL_SSD1681)
+#if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] stats panel: 6Row x 1Slot\n", __func__);
+#endif
                 rows = 6, cols = 1;
 #else
+#if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] stats panel: 3Row x 2Slot\n", __func__);
+#endif
                 rows = 3, cols = 2;
 #endif
             } 
             else if (sc_data->num_fields == 4) {
 #if defined(CONFIG_SSD168X_PANEL_SSD1681)
+#if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] stats panel: 4Row x 1Slot\n", __func__);
+#endif
                 rows = 4, cols = 1;
 #else
+#if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] stats panel: 2Row x 2Slot\n", __func__);
+#endif
                 rows = 2, cols = 2;
 #endif
             } else if (sc_data->num_fields == 2) {
+#if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] stats panel: 2Row x 1Slot\n", __func__);
+#endif
                 rows = 2, cols = 1;
             } else {
+#if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] stats panel: 3Row x 1Slot\n", __func__);
+#endif
                 rows = 3, cols = 1;
             }
             ui_set_main_cnt_offset(&ui_stats_screen.screen, offset);
@@ -1104,10 +1238,10 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                         lv_label_set_text(panel, f_name);
                 }
             }
-            statusbar_update();
+            // statusbar_update();
         }
 #if defined(CONFIG_LCD_IS_EPD)
-        ILOG(TAG, "[%s] done, %ld mode: %d offset: %hhd, dir: %hhu, screen_mode_counter: %hu", __func__, display_state.display->count, screen_mode, display_state.offset_mark, display_state.offset_mark_dir, display_state.screen_mode_counter);
+        // ILOG(TAG, "[%s] done, %ld mode: %d offset: %hhd, dir: %hhu, screen_mode_counter: %hu", __func__, buf_update_count, screen_mode, display_state.offset_mark, display_state.offset_mark_dir, display_state.screen_mode_counter);
         if(display_state.screen_mode_counter && display_state.screen_mode_counter%10 == 0) {
             if(display_state.offset_mark > 4) {
                 display_state.offset_mark_dir = 1;
@@ -1119,19 +1253,19 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
             else --display_state.offset_mark;
         }
         if(display_state.display->task_resumed_for_times) --display_state.display->task_resumed_for_times;
-        if(display_state.display->task_fast_refresh_on_time==display_state.display->count) {
+        if(display_state.display->task_fast_refresh_on_time==buf_update_count) {
             display_request_fast_refresh();
             display_task_cancel_req_fast_refresh();
         }
-        else if(display_state.display->task_full_refresh_on_time==display_state.display->count) {
+        else if(display_state.display->task_full_refresh_on_time==buf_update_count) {
             display_request_full_refresh(display_state.display->task_full_refresh_on_time_force);
             display_task_cancel_req_full_refresh();
         }
-        else if(display_state.display->count%100==0){
+        else if(buf_update_count > 0 && buf_update_count%100==0){
             display_request_full_refresh(0);
         }
 #endif
-        ++display_state.display->count;
+        display_incr_buf_update_count();
         ret += display_state.update_delay;
         display_state.old_screen_mode = display_state.current_screen_mode;
         display_refresh_unlock();
@@ -1142,7 +1276,10 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
 uint32_t screen_cb(void* arg) {
     main_ctx_t *ctx = &m_app_ctx;
     // const uint32_t lcd_count = get_lcd_ui_count();
-    ILOG(TAG, "[%s] %ld app_mode: %s, cur_screen: %s, next_screen: %s", __func__, display_state.display->count, app_mode_str[ctx->app_mode], cur_screen_str[ctx->cur_screen], cur_screen_str[ctx->next_screen]);
+    uint32_t buf_update_count = display_get_buf_update_count();
+#if (C_LOG_LEVEL < 2)
+    ILOG(TAG, "[%s] %ld app_mode: %s, cur_screen: %s, next_screen: %s", __func__, buf_update_count, app_mode_str[ctx->app_mode], cur_screen_str[ctx->cur_screen], cur_screen_str[ctx->next_screen]);
+#endif
     DMEAS_START();
     // struct display_s *dspl = &display;
     uint32_t delay=0;
@@ -1212,33 +1349,35 @@ uint32_t screen_cb(void* arg) {
     //         m_context.low_bat_count = 10;
     //     }
     // }
-    if(ctx->app_mode == APP_MODE_SLEEP){
+    else if(ctx->app_mode == APP_MODE_SLEEP){
+        // delay = _update_screen(display_state.display, SCREEN_MODE_SLEEP, 0);
         _sleep_screen(display_state.display, 0);
+        ctx->cur_screen = CUR_SCREEN_SLEEP_SCREEN;
+        display_state.old_screen_mode = SCREEN_MODE_SLEEP;
+        display_incr_buf_update_count();
         goto end;
     }
-    if (ctx->app_mode == APP_MODE_SHUT_DOWN || ctx->app_mode == APP_MODE_RESTART || m_app_ctx.ctx->request_shutdown || m_app_ctx.ctx->request_restart) {
+    else if ((!m_app_ctx.screen_auto_refresh && display_get_flush_count() < 2) || ctx->app_mode == APP_MODE_BOOT) {
+#if (C_LOG_LEVEL < 2)
+        ILOG(TAG, "[%s] Boot screen requested lcd_count: %lu, app_mode: %s", __func__, buf_update_count, app_mode_str[ctx->app_mode]);
+#endif
+        delay = _update_screen(display_state.display, SCREEN_MODE_BOOT, 0);
+        ctx->cur_screen = CUR_SCREEN_BOOT;
+        goto end;
+    } 
+    
+    else if (ctx->app_mode == APP_MODE_SHUT_DOWN || ctx->app_mode == APP_MODE_RESTART || m_app_ctx.ctx->request_shutdown || m_app_ctx.ctx->request_restart) {
         delay = _update_screen(display_state.display, SCREEN_MODE_SHUT_DOWN, 0);
         ctx->cur_screen = CUR_SCREEN_OFF_SCREEN;
         goto end;
     }
-#if !defined(CONFIG_LCD_IS_EPD)
-    if(display_state.display->count > 5){
-#else
-    if(display_state.display->count > 1){
-#endif
-        if(m_app_ctx.ctx->low_bat_count>=LOW_BAT_TRIGGER) {
-            delay=_update_screen(display_state.display, SCREEN_MODE_LOW_BAT, 0);
-            goto end;
-        }
-        if(!m_app_ctx.ctx->sdOK) {
-            delay=_update_screen(display_state.display, SCREEN_MODE_SD_TROUBLE, 0);
-            goto end;
-        }
+
+    else if(m_app_ctx.low_bat_countdown) {
+        delay=_update_screen(display_state.display, SCREEN_MODE_LOW_BAT, 0);
+        goto end;
     }
-    if (display_state.display->count < 2 || ctx->app_mode == APP_MODE_BOOT) {
-        ILOG(TAG, "[%s] Boot screen requested lcd_count: %lu, app_mode: %s", __func__, display_state.display->count, app_mode_str[ctx->app_mode]);
-        delay = _update_screen(display_state.display, SCREEN_MODE_BOOT, 0);
-        ctx->cur_screen = CUR_SCREEN_BOOT;
+    else if(!m_app_ctx.ctx->sdOK) {
+        delay=_update_screen(display_state.display, SCREEN_MODE_SD_TROUBLE, 0);
         goto end;
     }
     
@@ -1370,10 +1509,12 @@ uint32_t screen_cb(void* arg) {
 #endif
     }
     end:
+    if(!m_app_ctx.screen_auto_refresh && display_get_flush_count() == 2) {
+        delay_ms(300);
+    }
+
+    update_lv_timers();
     DMEAS_END(TAG, "[%s] took: %llu us",  __FUNCTION__);
-#if (C_LOG_LEVEL < 2 || defined(DEBUG))
-    task_memory_info(__func__);
-#endif
     return delay;
 }
 
@@ -1389,6 +1530,7 @@ struct display_s *lcd_init() {
 
 void lcd_deinit() {
     ILOG(TAG, "[%s]", __func__);
+    stop_lv_timers();
     display_uninit(display_state.display);
 }
 

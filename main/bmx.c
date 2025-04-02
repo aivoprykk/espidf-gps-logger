@@ -37,11 +37,13 @@ static esp_err_t bmx_read() {
     }
     bmx280_setMode(bmx280, BMX280_MODE_SLEEP);
 //done:
+#if (C_LOG_LEVEL < 2)
     if(bmx_stat.status!=0) {
         ESP_LOGE(TAG, "Bmx280 %s failed: %s ", bmx_stat.status==-10?"set_mode force":bmx_stat.status==-11?"read":"set_mode sleep", last_err);
     } else {
         ESP_LOGI(TAG, "Bmx280 Values: temp = %" PRId32 ", pres = %" PRIu32 ", hum = %" PRIu32 ", elapsed = %" PRIu32, bmx_stat.temp, bmx_stat.press, bmx_stat.humid, bmx_stat.elapsed);
     }
+#endif
     MEAS_END(TAG, "[%s] took %llu ms", __func__);
     return err;
 }

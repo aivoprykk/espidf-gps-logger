@@ -55,7 +55,7 @@ if(CONFIG_LOGGER_HTTP_ENABLED)
 endif()
 
 
-if(CONFIG_LOGGER_VFS_ENABLED)
+if(CONFIG_LOGGER_VFS_ENABLED AND CONFIG_FLASH_PARTITIONS)
 MESSAGE("---- testing if flash_data exists in ${CMAKE_CURRENT_SOURCE_DIR}/../flash_data")
 if(DEFINED CONFIG_IDF_TARGET_ESP32S3)
 set(fdir ${pdir}/flash_data_s3)
