@@ -522,6 +522,11 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->screen.spee
     return ESP_OK;
 }
 
+/**
+ * @brief Updates the low speed seconds counter.
+ *        This function checks the average speed over 10 seconds and
+ *        updates the low speed seconds counter accordingly.
+ */
 static void speed_info_bar_update_low_speed_seconds(void) {
     struct gps_context_s *gps = &m_app_ctx.ctx->gps;
     if (gps->S10.avg_s > SEC_TO_MS(2)) {  
@@ -541,6 +546,13 @@ static void speed_info_bar_update_low_speed_seconds(void) {
     }
 }
 
+/**
+ * @brief Updates the speed information on the screen.
+ *        This function retrieves the current speed from the GPS context,
+ *        formats it, and updates the corresponding label in the UI.
+ *
+ * @param timer Pointer to the timer triggering this callback.
+ */
 static void speed_cb(lv_timer_t *timer) {
     ILOG(TAG, "[%s]", __func__);
     const struct gps_context_s *gps = &m_app_ctx.ctx->gps;
@@ -573,6 +585,13 @@ static void speed_cb(lv_timer_t *timer) {
     }
 }
 
+/**
+ * @brief Updates the GPS information on the screen.
+ *        This function retrieves the current GPS status, formats it,
+ *        and updates the corresponding labels in the UI.
+ *
+ * @param timer Pointer to the timer triggering this callback.
+ */
 static void gps_info_cb(lv_timer_t *timer) {
     ILOG(TAG, "[%s]", __func__);
     char str[64] = {0}, *p = str;
@@ -609,6 +628,13 @@ static void gps_info_cb(lv_timer_t *timer) {
     set_label_text_safe(ui_info_screen.info_third_lbl, &str[0], 1);
 }
 
+/**
+ * @brief Updates the Wi-Fi information on the screen.
+ *        This function retrieves the current Wi-Fi connection status,
+ *        formats it, and updates the corresponding labels in the UI.
+ *
+ * @param timer Pointer to the timer triggering this callback.
+ */
 static void wifi_info_cb(lv_timer_t *timer) {
     ILOG(TAG, "[%s]", __func__);
 #if defined(CONFIG_LOGGER_WIFI_ENABLED)
@@ -628,15 +654,22 @@ static void wifi_info_cb(lv_timer_t *timer) {
         memcpy(p, wctx->hostname, strlen(wctx->hostname)), p += strlen(wctx->hostname);
         memcpy(p, ".local", 11), p+=11;
     }
-    set_label_text_safe(ui_info_screen.info_lbl, &str[0], 1);
+    set_label_text_safe(ui_info_screen.info_secondary_lbl, &str[0], 1);
     str[0] = 0;
     p = str;
     if(wctx->s_ap_connection) memcpy(p, "password", 11), p+=11;
     *p = 0;
-    set_label_text_safe(ui_info_screen.info_lbl, &str[0], 1);
+    set_label_text_safe(ui_info_screen.info_third_lbl, &str[0], 1);
     #endif
 }
 
+/**
+ * @brief Updates the status bar with the current time and date.
+ *        This function retrieves the current time from the RTC context,
+ *        formats it, and updates the corresponding label in the status bar.
+ *
+ * @param timer Pointer to the timer triggering this callback.
+ */
 static void statusbar_time_cb(lv_timer_t *timer) {
     ILOG(TAG, "[%s]", __func__);
 #if defined(STATUS_PANEL_V1)
@@ -647,6 +680,13 @@ static void statusbar_time_cb(lv_timer_t *timer) {
 #else
     lv_statusbar_t * statusbar = (lv_statusbar_t *)ui_StatusPanel;
 #endif
+    const struct main_ctx_s *ctx = 0;
+    if(timer) {
+        ctx = timer->user_data;
+        if(ctx->app_mode == APP_MODE_WIFI) {
+            wifi_info_cb(timer);
+        }
+    }
     struct tm *tm = &m_context_rtc.rtc_tm;
     char tmp[24]={0}, *p = tmp;
     lv_obj_t *panel;
@@ -669,6 +709,13 @@ static void statusbar_time_cb(lv_timer_t *timer) {
     }
 }
 
+/**
+ * @brief Updates the temperature status bar with the latest temperature data.
+ *        This function retrieves the temperature reading, formats it, and updates
+ *        the corresponding label in the status bar.
+ *
+ * @param timer Pointer to the timer triggering this callback.
+ */
 static void statusbar_temp_cb(lv_timer_t *timer) {
 #if (C_LOG_LEVEL < 2)
    ILOG(TAG, "[%s]", __func__);
@@ -698,6 +745,13 @@ static void statusbar_temp_cb(lv_timer_t *timer) {
     }
 }
 
+/**
+ * @brief Updates the battery status bar with the current battery voltage.
+ *        This function retrieves the battery voltage, formats it, and updates
+ *        the corresponding label in the status bar.
+ *
+ * @param timer Pointer to the timer triggering this callback.
+ */
 static void statusbar_bat_cb(lv_timer_t *timer) {
 #if (C_LOG_LEVEL < 2)
     ILOG(TAG, "[%s]", __func__);
@@ -744,6 +798,13 @@ static void statusbar_bat_cb(lv_timer_t *timer) {
     }
 }
 
+/**
+ * @brief Updates the GPS status bar with the current GPS status.
+ *        This function retrieves the GPS status, formats it, and updates
+ *        the corresponding label in the status bar.
+ *
+ * @param timer Pointer to the timer triggering this callback.
+ */
 static void statusbar_gps_cb(lv_timer_t *timer) {
     ILOG(TAG, "[%s]", __func__);
 #if defined(STATUS_PANEL_V1)
