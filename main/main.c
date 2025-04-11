@@ -168,7 +168,7 @@ static void low_to_sleep(uint64_t sleep_time) {
 }
 
 static esp_timer_handle_t low_bat_timer = 0;
-#define LOW_BAT_SEQUENCE_TIME_MS 20000
+#define LOW_BAT_SEQUENCE_TIME_MS SEC_TO_MS(20)
 void low_bat_timer_cb(void *arg) {
     ILOG(TAG, "[%s]", __FUNCTION__);
     if (low_bat_timer) {
@@ -258,20 +258,24 @@ static int wakeup_init() {
             /* ret += Boot_screen();
             delay_ms(ret); */
             break;
+#if (C_LOG_LEVEL < 3)
         case ESP_SLEEP_WAKEUP_EXT1:
             ILOG(TAG, "%s", wakeup_reasons[wakeup_reason]);
             break;
+#endif
         case ESP_SLEEP_WAKEUP_TIMER:
             ILOG(TAG, "%s", wakeup_reasons[wakeup_reason]);
             // screen_cb(&display);
             goto lowbat;
             break;
+#if (C_LOG_LEVEL < 3)
         case ESP_SLEEP_WAKEUP_TOUCHPAD:
             ILOG(TAG, "%s", wakeup_reasons[wakeup_reason]);
             break;
         case ESP_SLEEP_WAKEUP_ULP:
             ILOG(TAG, "%s", wakeup_reasons[wakeup_reason]);
             break;
+#endif
         default:
             ILOG(TAG, "%s int: %d", wakeup_reasons[7], wakeup_reason);
             /* ret += Boot_screen();
@@ -322,9 +326,7 @@ static int shut_down_gps(int no_sleep) {
 // For RTOS, the watchdog has to be triggered
 
 void feedTheDog_Task0() {
-    TIMERG0.wdt_wprotect =
-        TIMG_WDT_WKEY_VALUE;   // write enable
-                               // TIMERG0.wdt_wprotect=TIMG_WDT_WKEY_VALUE;
+    TIMERG0.wdt_wprotect = TIMG_WDT_WKEY_VALUE;   // write enable
     TIMERG0.wdt_feed = 1;      // feed dog
     TIMERG0.wdt_wprotect = 0;  // write protect
 }
@@ -352,10 +354,8 @@ static void wdt_user_task() {
     int32_t millis = get_millis();
     int wdt_task0_duration = millis - wdt_task0;
     int wdt_task1_duration = millis - wdt_task1;
-    int task_timeout =
-        (WDT_TIMEOUT - 1) * 1000;  // 1 second less then reboot timeout
-    if ((wdt_task0_duration < task_timeout) &&
-        (wdt_task1_duration < task_timeout)) {
+    int task_timeout = SEC_TO_MS((WDT_TIMEOUT - 1));  // 1 second less then reboot timeout
+    if ((wdt_task0_duration < task_timeout) && (wdt_task1_duration < task_timeout)) {
         feedTheDog_Task0();
         feedTheDog_Task1();
     }
@@ -403,12 +403,11 @@ static void wdt_task(void *arg) {
 
 static void init_watchdog() {
 #if !CONFIG_ESP_TASK_WDT_INIT
-        esp_task_wdt_config_t twdt_config = {
-            .timeout_ms = WDT_TIMEOUT * 1000,
-            .idle_core_mask =
-                (1 << portNUM_PROCESSORS) - 1,  // Bitmask of all cores
+   esp_task_wdt_config_t twdt_config = {
+            .timeout_ms = SEC_TO_MS(WDT_TIMEOUT),
+            .idle_core_mask = (1U << portNUM_PROCESSORS) - 1,  // Bitmask of all cores
             .trigger_panic = false,
-        };
+   };
     esp_task_wdt_init(&twdt_config);
     ESP_LOGI(TAG, "TWDT initialized");
     ESP_LOGI(TAG, "Create TWDT task");
@@ -417,7 +416,6 @@ static void init_watchdog() {
                             xTaskGetCurrentTaskHandle(), 10, NULL, 0);
 #endif  // CONFIG_ESP_TASK_WDT_INIT
 }
-
 #endif  // USE_WDT
 
 #if defined(CONFIG_LOGGER_WIFI_ENABLED)
@@ -513,18 +511,18 @@ void init_power() {
 #endif    
 
 static void gps_save_rtc() {
-    m_context_rtc.RTC_distance = m_context.gps.Ublox.total_distance / 1000000;
-    m_context_rtc.RTC_alp = avail_fields[26].value.num();
-    m_context_rtc.RTC_500m = avail_fields[9].value.num();
-    m_context_rtc.RTC_1h = avail_fields[38].value.num();
-    m_context_rtc.RTC_mile = avail_fields[22].value.num(); // null...
-    m_context_rtc.RTC_max_2s = avail_fields[5].value.num();
-    m_context_rtc.RTC_avg_10s = avail_fields[2].value.num();
-    m_context_rtc.RTC_R1_10s = avail_fields[16].value.num();
-    m_context_rtc.RTC_R2_10s = avail_fields[17].value.num();
-    m_context_rtc.RTC_R3_10s = avail_fields[18].value.num();
-    m_context_rtc.RTC_R4_10s = avail_fields[19].value.num();
-    m_context_rtc.RTC_R5_10s = avail_fields[20].value.num();
+    m_context_rtc.RTC_distance = avail_fields[fld_distance].value.num();
+    m_context_rtc.RTC_alp = avail_fields[fld_a500_display_max].value.num();
+    m_context_rtc.RTC_500m = avail_fields[fld_m500_display_max].value.num();
+    m_context_rtc.RTC_1h = avail_fields[fld_s3600_display_max].value.num();
+    m_context_rtc.RTC_mile = avail_fields[fld_m1852_display_max].value.num(); // null...
+    m_context_rtc.RTC_max_2s = avail_fields[fld_s2_display_max].value.num();
+    m_context_rtc.RTC_avg_10s = avail_fields[fld_s10_display_max].value.num();
+    m_context_rtc.RTC_R1_10s = avail_fields[fld_s10_r1_display].value.num();
+    m_context_rtc.RTC_R2_10s = avail_fields[fld_s10_r2_display].value.num();
+    m_context_rtc.RTC_R3_10s = avail_fields[fld_s10_r3_display].value.num();
+    m_context_rtc.RTC_R4_10s = avail_fields[fld_s10_r4_display].value.num();
+    m_context_rtc.RTC_R5_10s = avail_fields[fld_s10_r5_display].value.num();
     
     getLocalTime(&m_context_rtc.rtc_tm, 0);
     // m_context_rtc.RTC_year = ((tms.tm_year) + 1900);

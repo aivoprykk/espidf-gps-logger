@@ -62,7 +62,6 @@ struct display_state_s {
     uint32_t next_bat_str_update;
     screen_mode_t current_screen_mode;
     screen_mode_t old_screen_mode;
-    uint8_t test_field;
     int16_t gps_image_angle;
 #if defined(CONFIG_LCD_IS_EPD)
     int8_t offset_mark;
@@ -71,6 +70,9 @@ struct display_state_s {
     uint16_t screen_mode_counter;
     uint8_t offset_mark_dir;
 #endif
+    uint32_t start_logging_millis;
+    int16_t low_speed_seconds;
+    uint8_t speed_timer_status;
 };
 
 static struct display_s display;
@@ -78,10 +80,11 @@ static struct display_state_s display_state = { &display, 0, {0, 0, 0, 0, 0, 0, 
 #if defined(CONFIG_BMX_ENABLE) 
 0, 
 #endif
-"", "", 0, 0, SCREEN_MODE_UNKNOWN, SCREEN_MODE_UNKNOWN, 0, 0
+"", "", 0, 0, SCREEN_MODE_UNKNOWN, SCREEN_MODE_UNKNOWN, 0,
 #if defined(CONFIG_LCD_IS_EPD)
-    , 0, 0, 0, 0, 0
+    0, 0, 0, 0, 0,
 #endif
+    0, 0, 0
 };
 
 static const char *TAG = "lcd";
@@ -250,46 +253,61 @@ static size_t temp_to_char(char *str) {
     return 0;
 }
 
+#define CFG_ENUM_F(l) cfg_fld_##l,
+enum cfg_speed_fld_e {
+  SPEED_FIELD_ITEM_LIST(CFG_ENUM_F)
+};
+
 static esp_err_t speed_info_bar_update() {  // info bar when config->screen.speed_large_font is 1 or 0
     const logger_config_t *config = m_app_ctx.config;
     if(!config) return ESP_ERR_INVALID_STATE;
     uint8_t field = config->screen.speed_field;          // default is in config.txt
-    const uint8_t bar_max = 240;                                  // 240 pixels is volledige bar
-    uint16_t bar_length = config->bar_length * 1000 / bar_max;  // default 100% length = 1852 m
+    const uint8_t bar_max = BAR_MAX;                                  // 240 pixels is volledige bar
+    uint16_t bar_length = M_TO_MM(config->bar_length) / bar_max;  // default 100% length = 1852 m
     const uint8_t font_size = config->screen.speed_large_font;
 #if defined(CONFIG_GPS_LOG_ENABLED)
     struct gps_context_s *gps = &m_app_ctx.ctx->gps;
     const struct gps_data_s * gps_data = &gps->Ublox;
     const struct ubx_config_s * ubx_dev = gps->ubx_device;
 
-    if (config->screen.speed_field == 1) {  // only switch if config.field==1 !!!
-        if (((int)(gps_data->total_distance / 1000000) % 10 == 0) && (gps_data->alfa_distance / 1000 > 1000))
-            field = 5;  // indien x*10km, totale afstand laten zien
-        // if(gps->S10.s_max_speed<(gps->S10.display_speed[5]*0.95))
+    if (field == cfg_fld_dynamic) {  // only switch if config.field==1 !!!
+        if (((int)MM_TO_KM(gps_data->total_distance) % 10 == 0) && (MM_TO_M(gps_data->alfa_distance) > ONE_K))
+            field = cfg_fld_stat_dist_500m;  // indien x*10km, totale afstand laten zien
+        // else if(gps->S10.s_max_speed<(gps->S10.display_speed[5]*0.95))
         //     field=8;//if run slower dan 95% of slowest run, show 1h result
-        if ((gps_data->alfa_distance / 1000 < 350) && (gps->alfa_window < 100))
-            field = 3;  // first 350 m after gibe  alfa screen !!
-        if (gps_data->alfa_distance / 1000 > config->bar_length)
-            field = 4;  // run longer dan 1852 m, NM scherm !!
-    } else if (config->screen.speed_field == 2) { // show Nautical Mile status
-        if (gps_data->run_distance / 1000 > config->bar_length)
-            field = 4;  // if run longer dan 1852 m, NM scherm !!
-    } else if (config->screen.speed_field == 7) { // show alpha status
-        if ((gps_data->alfa_distance / 1000 < 350) && (gps->alfa_window < 100))
-            field = 3;  // first 350 m after gibe  alfa screen !!
+        else if ((MM_TO_M(gps_data->alfa_distance) < 350) && (gps->alfa_window < 100))
+            field = cfg_fld_stat_alpha;  // first 350 m after gibe  alfa screen !!
+        else if (MM_TO_M(gps_data->alfa_distance) > config->bar_length)
+            field =  cfg_fld_stat_1852_m;  // run longer dan 1852 m, NM scherm !!
+    } 
+    else if (field == cfg_fld_stat_10_sec) { // show Nautical Mile status
+        if (MM_TO_M(gps_data->run_distance) > config->bar_length)
+            field =  cfg_fld_stat_1852_m;  // if run longer dan 1852 m, NM scherm !!
         else
-            field = 7;
-    } else if (config->screen.speed_field == 8) { // show 1 hour status
-        field = 8;
-    } else if (config->screen.speed_field == 9) {  // 1 hour default, but first alfa, and if good run, last run
-        field = 8;
-        if (gps_data->alfa_distance / 1000 > config->bar_length)
-            field = 4;  // run longer dan 1852 m, NM scherm !!
-        if (gps->S10.s_max_speed > gps->S10.display_speed[5])
-            field = 1;  // if run faster then slowest run, show AVG & run
-        if ((gps_data->alfa_distance / 1000 < 350) && (gps->alfa_window < 100))
-            field = 3;  // first 350 m after gibe  alfa screen !!
+            field = cfg_fld_stat_10_sec;
     }
+    else if (field == cfg_fld_stat_half_hour) { // show alpha status
+        if ((MM_TO_M(gps_data->alfa_distance) < 350) && (gps->alfa_window < 100))
+            field =  cfg_fld_stat_alpha;  // first 350 m after gibe  alfa screen !!
+        else
+            field = cfg_fld_stat_half_hour;
+    }
+    else if (field == cfg_fld_stat_1_hour) { // show 1 hour status
+        if ((MM_TO_M(gps_data->alfa_distance) < 350) && (gps->alfa_window < 100))
+            field =  cfg_fld_stat_alpha;  // first 350 m after gibe  alfa screen !!
+        else
+        field = cfg_fld_stat_1_hour;
+    }
+    else if (field == cfg_fld_stat_1h_dynamic) {  // 1 hour default, but first alfa, and if good run, last run
+        if (MM_TO_M(gps_data->alfa_distance) > config->bar_length)
+            field = cfg_fld_stat_1852_m;  // run longer dan 1852 m, NM scherm !!
+        else if (gps->S10.s_max_speed > gps->S10.display_speed[5])
+            field = cfg_fld_stat_10_sec;  // if run faster then slowest run, show AVG & run
+        else if ((MM_TO_M(gps_data->alfa_distance) < 350) && (gps->alfa_window < 100))
+            field = cfg_fld_stat_alpha;  // first 350 m after gibe  alfa screen !!
+        else
+          field = cfg_fld_stat_1_hour;
+  }
 #endif
 
     float s[] = {0, 0};
@@ -301,7 +319,7 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->screen.spee
         memcpy(val[1], scr_fld_2[0], 4);
         goto topoint;
     }
-    if(gps->S2.avg_s < 1000) { // 1ms = 3.6km/h
+    if(gps->S2.avg_s < SEC_TO_MS(1)) { /// 1ms = 3.6km/h
         memcpy(val[0], scr_fld_2[1], 4);
         memcpy(val[1], scr_fld_2[1], 4);
         goto topoint;
@@ -309,17 +327,17 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->screen.spee
     // double s1 = 0, s2 = 0;
     else 
 #endif
-    if (field <= 2 || display_state.test_field == 2) { // 10 seconds stats
-        s[0] = avail_fields[57].value.num(); // s10 current run max speed
-        s[1] = avail_fields[2].value.num();  // s10 avg speed
-        if(s[0] >= 100 || s[1] >= 100) {
-            f1_to_char(s[0], val[0]);
-            f1_to_char(s[1], val[1]);
-        }
-        else {
+    if (field <= cfg_fld_stat_10_sec) { /// 10 seconds stats
+        s[0] = avail_fields[fld_s10_s_max].value.num(); // s10 current run max speed
+        s[1] = avail_fields[fld_s10_display_max].value.num();  // s10 avg speed
+        if (NUM_LT_3_DIG(s[0])) 
             f2_to_char(s[0], val[0]);
+        else
+            f1_to_char(s[0], val[0]);
+        if (NUM_LT_3_DIG(s[1]))
             f2_to_char(s[1], val[1]);
-        }
+        else
+            f1_to_char(s[1], val[1]);
 #if defined(CONFIG_GPS_LOG_ENABLED)
         topoint:
 #endif
@@ -337,10 +355,10 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->screen.spee
     // Between 400m and 1852m after jibe : Actual Run + AVG
     // More then 1852m : NM actual speed and NM Best speed
 
-    else if ((field == 3 || display_state.test_field == 3)) {
-        bar_length = 250 * 1000 / bar_max;  // full bar length with Alfa = 250 meter
+    else if (field == cfg_fld_stat_alpha) {
+        bar_length = M_TO_MM(250) / bar_max;  // full bar length with Alfa = 250 meter
 #if defined(CONFIG_GPS_LOG_ENABLED)
-        if ((gps->alfa_window < 99) && (gps_data->alfa_distance / 1000 < 255)) { // 250 meter na gijp
+        if ((gps->alfa_window < 99) && (MM_TO_M(gps_data->alfa_distance) < 250)) { // 250 meter na gijp
             if (gps->alfa_exit > 99)
                 gps->alfa_exit = 99;  // begrenzen alfa_exit...
             var[0] =  scr_fld[0][1][0];
@@ -350,30 +368,24 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->screen.spee
         } else 
 #endif
         { // alfa speed stats
-            s[0] = avail_fields[26].value.num(); // a500 current run max speed
-            s[1] = avail_fields[61].value.num(); // a500 max speed
-            if (s[0] > 100 || s[1] > 100) {
-                if (font_size == 0)
-                    f1_to_char(s[0], val[0]); // last alpha
-                else
-                    val[0][0] = 0; // var in 1. col, val in 2. col
-                if (s[1] > 1) {
-                    f1_to_char(s[1], val[1]); // best alpha
-                } else {
-                    goto tonpoint;
-                }
-            } else {
-                if (font_size == 0)
+            s[0] = avail_fields[fld_a500_display_max].value.num(); // a500 current run max speed
+            s[1] = avail_fields[fld_a500_a_max].value.num(); // a500 max speed
+            if (font_size == 0) {
+                if (NUM_LT_3_DIG(s[0]))
                     f2_to_char(s[0], val[0]);
                 else
-                    val[0][0] = 0;
-                if (s[1] > 1) {
+                    f1_to_char(s[0], val[0]);
+            }
+            else
+                val[0][0] = 0;
+            if (s[1] > 1) {
+                if (NUM_LT_3_DIG(s[1]))
                     f2_to_char(s[1], val[1]);
-                } else {
-                tonpoint:
-                    memcpy(val[1], scr_fld_2[1], 4);
-                    val[1][4]=0;
-                }
+                else
+                    f1_to_char(s[1], val[1]);
+            } else {
+                memcpy(val[1], scr_fld_2[1], 4);
+                val[1][4]=0;
             }
             if (font_size == 0) {
                 var[0] = scr_fld[0][2][0];
@@ -384,22 +396,23 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->screen.spee
                 var[1] = scr_fld[1][2][1];
             }
         }
-    } else if (field == 4 || display_state.test_field == 4) { // nautical mile
-        s[0] = avail_fields[22].value.num(); // m1852 current run max speed
-        s[1] = avail_fields[62].value.num(); // m1852 max speed
-        if (s[0] > 100 || s[1] > 100) {
-            f1_to_char(s[0], val[0]);
-            if (font_size == 0) 
-                f1_to_char(s[1], val[1]);
-            else
-                *val[1] = 0;
-        } else {
+    }
+    else if (field == cfg_fld_stat_1852_m) { // nautical mile
+        s[0] = avail_fields[fld_m1852_display_max].value.num(); // m1852 current run max speed
+        s[1] = avail_fields[fld_m1852_m_max].value.num(); // m1852 max speed
+        if (NUM_LT_3_DIG(s[0])) {
             f2_to_char(s[0], val[0]);
-            if (font_size == 0)
-                f2_to_char(s[1], val[1]);
-            else
-                *val[1] = 0;
+        } else {
+            f1_to_char(s[0], val[0]);
+        }      
+        if (font_size == 0){
+                if (NUM_LT_3_DIG(s[1]))
+                    f2_to_char(s[1], val[1]);
+                else
+                    f1_to_char(s[1], val[1]);
         }
+        else
+            *val[1] = 0;
         if (font_size == 0) {
             var[0] = scr_fld[0][3][0];  // Actuele nautical mile
             var[1] = scr_fld[0][3][1];
@@ -407,94 +420,221 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->screen.spee
             var[0] = scr_fld[1][3][0];  // Actuele nautical mile
             var[1] = scr_fld[1][3][1];
         }
-    } else if (field == 5 || display_state.test_field == 5) { // total distance
-        s[0] = avail_fields[41].value.num(); // total dist
-        s[1] = avail_fields[63].value.num(); // m500 current run max speed
+    }
+    else if (field == cfg_fld_stat_dist_500m) { // total distance
+        s[0] = avail_fields[fld_distance].value.num(); // total dist
+        s[1] = avail_fields[fld_m500_m_max].value.num(); // m500 current run max speed
         var[0] = scr_fld[0][4][0];
         var[1] = scr_fld[0][4][1];
-        if (s[0] > 100) 
-            f1_to_char(s[0], val[0]);
-        else
+        if (NUM_LT_3_DIG(s[0])) 
             f2_to_char(s[0], val[0]);
-        if (s[1] > 100)
-            f1_to_char(s[1], val[1]);
         else
-            f2_to_char(s[1], val[1]);
-    } else if (field == 6 || display_state.test_field == 6) { // 2 and 10 seconds stats
-        s[0] = avail_fields[5].value.num(); // s2 max speed
-        s[1] = avail_fields[1].value.num(); // s10 max speed
-        if (s[0] > 100 || s[1] > 100) {
             f1_to_char(s[0], val[0]);
-            f1_to_char(s[1], val[1]);
-        } else {
-            f2_to_char(s[0], val[0]);
+        if (NUM_LT_3_DIG(s[1]))
             f2_to_char(s[1], val[1]);
-        }
+        else
+            f1_to_char(s[1], val[1]);
+    }
+    else if (field == cfg_fld_stat_max_2s_10s) { // 2 and 10 seconds stats
+        s[0] = avail_fields[fld_s2_display_max].value.num(); // s2 max speed
+        s[1] = avail_fields[fld_s10_display_max].value.num(); // s10 max speed
+        if (NUM_LT_3_DIG(s[0])) 
+            f2_to_char(s[0], val[0]);
+        else
+            f1_to_char(s[0], val[0]);
+        if (NUM_LT_3_DIG(s[1]))
+            f2_to_char(s[1], val[1]);
+        else
+            f1_to_char(s[1], val[1]);
         var[0] = scr_fld[0][5][0];
         var[1] = scr_fld[0][5][1];
-    } else if (field == 7 || display_state.test_field == 7) { // 30 minutes stats
-        s[0] = avail_fields[64].value.num();
-        s[1] = avail_fields[34].value.num(); // s1800 max speed
-        if (s[0] > 100 || s[1] > 100) {
-            f1_to_char(s[0], val[0]);
-            f1_to_char(s[1], val[1]);
-        } else {
+    }
+    else if (field == cfg_fld_stat_half_hour) { // 30 minutes stats
+        s[0] = avail_fields[fld_s1800_s_max].value.num();
+        s[1] = avail_fields[fld_s1800_display_max].value.num(); // s1800 max speed
+        if (NUM_LT_3_DIG(s[0])) 
             f2_to_char(s[0], val[0]);
+        else
+            f1_to_char(s[0], val[0]);
+        if (NUM_LT_3_DIG(s[1]))
             f2_to_char(s[1], val[1]);
-        }
+        else
+            f1_to_char(s[1], val[1]);
         var[0] = scr_fld[0][6][0];
         var[1] = scr_fld[0][6][1];
-    } else if (field == 8 || display_state.test_field == 8) { // 60 minutes stats
-        s[0] = avail_fields[65].value.num();
-        s[1] = avail_fields[38].value.num(); // 1h max speed
-        if (s[0] > 100 || s[1] > 100) {
-            f1_to_char(s[0], val[0]);
-            f1_to_char(s[1], val[1]);
-        } else {
+    }
+    else if (field == cfg_fld_stat_1_hour) { // 60 minutes stats
+        s[0] = avail_fields[fld_s3600_s_max].value.num();
+        s[1] = avail_fields[fld_s3600_display_max].value.num(); // 1h max speed
+        if (NUM_LT_3_DIG(s[0])) 
             f2_to_char(s[0], val[0]);
+        else
+            f1_to_char(s[0], val[0]);
+        if (NUM_LT_3_DIG(s[1]))
             f2_to_char(s[1], val[1]);
-        }
+        else
+            f1_to_char(s[1], val[1]);
         var[0] = scr_fld[0][7][0];
         var[1] = scr_fld[0][7][1];
     }
 
     // col 1
-        lv_label_set_text(ui_speed_screen.cells[0][0].info, var[0]);
-        lv_label_set_text(ui_speed_screen.cells[0][0].title, val[0]);
-    // col 2
-        lv_label_set_text(ui_speed_screen.cells[0][1].info, var[1]);
-        lv_label_set_text(ui_speed_screen.cells[0][1].title, val[1]);
-
-    uint32_t run_rectangle_length = 0;
-#if defined(CONFIG_GPS_LOG_ENABLED)
-    uint32_t millis = get_millis();
-    uint32_t log_seconds = (millis - gps->start_logging_millis) / 1000;  // aantal seconden sinds loggen is gestart
-    if (gps->S10.avg_s > 2000) {  // if the speed is higher then 2000 mm/s, reset the counter
-        gps->low_speed_seconds = 0;
+    lv_obj_t *panel;
+    if ((panel = ui_speed_screen.cells[0][0].info)) {
+        set_label_text_safe(panel, var[0], 0);
     }
-    gps->low_speed_seconds++;
-    if (gps->low_speed_seconds > 120) { // bar will be reset if the 10s speed drops under 2m/s for more then 120 s !!!!
-        gps->start_logging_millis = millis;
-    } 
-    run_rectangle_length = (gps_data->alfa_distance / bar_length);  // 240 pixels is volledige bar, gps->ublox.alfa_distance zijn mm
-    if (field == 7) {
-        run_rectangle_length = log_seconds * 240 / 1800;
-        if (log_seconds > 1800) {
-            gps->start_logging_millis = millis;
-        }
-    }  // 30 minutes = full bar
-    else if (field == 8) {
-        run_rectangle_length = log_seconds * 240 / 3600;
-        if (log_seconds > 3600) {
-            gps->start_logging_millis = millis;
-        }
-    }  // 60 minutes = full bar
+    if ((panel = ui_speed_screen.cells[0][0].title)) {
+        set_label_text_safe(panel, val[0], 0);
+    }
+    // col 2
+    if ((panel = ui_speed_screen.cells[0][1].info)) {
+        set_label_text_safe(panel, var[1], 0);
+    }
+    if ((panel = ui_speed_screen.cells[0][1].title)) {
+        set_label_text_safe(panel, val[1], 0);
+    }
+    if ((panel = ui_speed_screen.bar)) {
+      uint32_t run_rectangle_length = 0;
+#if defined(CONFIG_GPS_LOG_ENABLED)
+      uint32_t millis = get_millis();
+      uint32_t log_seconds = display_state.start_logging_millis ? MS_TO_SEC(millis - display_state.start_logging_millis) : 0;  // number of seconds since logging started
+      if (field == cfg_fld_stat_half_hour) {
+          run_rectangle_length = log_seconds * bar_max / (HALF_H_IN_SECS);
+          if (log_seconds > (HALF_H_IN_SECS)) {
+              display_state.start_logging_millis = millis;
+          }
+      }  // 30 minutes = full bar
+      else if (field == cfg_fld_stat_1_hour) {
+          run_rectangle_length = log_seconds * bar_max / ONE_H_IN_SECS;
+          if (log_seconds > ONE_H_IN_SECS) {
+              display_state.start_logging_millis = millis;
+          }
+      }  // 60 minutes = full bar
+      else if (field == cfg_fld_stat_alpha && gps_data->alfa_distance <= bar_length) {
+          run_rectangle_length = gps_data->alfa_distance / bar_length;
+      }
+      else {
+          run_rectangle_length = gps_data->run_distance / bar_length;
+      }
 #endif
-    // if (bar_length) {
-        // screen.op->fillRect(&screen, offset, DISPLAY_TOP_PAD + bar_position, run_rectangle_length, SPEED_INFO_BOTTOM_HEIGHT, FG_COLOR);  // balk voor run_distance weer te geven...
-        lv_bar_set_value(ui_speed_screen.bar, run_rectangle_length, 0);
-    // }
+        lv_bar_set_value(panel, run_rectangle_length, 0);
+    }
     return ESP_OK;
+}
+
+static void speed_info_bar_update_low_speed_seconds(void) {
+    struct gps_context_s *gps = &m_app_ctx.ctx->gps;
+    if (gps->S10.avg_s > SEC_TO_MS(2)) {  
+        // if the speed is higher then 2 m/s, reset the counter
+        display_state.low_speed_seconds = 0;
+        if(!display_state.start_logging_millis)
+            goto start_logging;
+    }
+    else {
+        if (display_state.low_speed_seconds > BAR_RESET_IN_STILL_SECS) { 
+            // bar will be reset if the 10s speed drops under 2m/s for more then 120 s !!!!
+        start_logging:
+            display_state.start_logging_millis = get_millis();
+        }
+        else
+            ++display_state.low_speed_seconds;
+    }
+}
+
+static void speed_cb(lv_timer_t *timer) {
+    ILOG(TAG, "[%s]", __func__);
+    const struct gps_context_s *gps = &m_app_ctx.ctx->gps;
+    const struct ubx_config_s *ubx_dev = gps->ubx_device;
+    char str[8] = {0}, *p = str;
+    size_t len = 4;
+    float gpsspd;
+    if (ui_speed_screen.speed) {
+#if defined(CONFIG_GPS_LOG_ENABLED)
+#if defined(CONFIG_UBLOX_ENABLED)
+      if (!ubx_dev || !ubx_dev->ready || !gps->signal_ok) {
+          memcpy(p, "-.--", len);
+          *(p+len) = 0;
+      }
+#endif
+      else if(gps->S2.avg_s < ONE_MS_IN_MMS) {
+          memcpy(p, "0.00", len);
+          *(p+len) = 0;
+      }
+      else 
+      {
+          gpsspd = gps_last_speed_smoothed(2) * c_gps_cfg.speed_calibration;
+          len = (NUM_GE_3_DIG(gpsspd)) ? f1_to_char(gpsspd, p) : f2_to_char(gpsspd, p);
+      }
+#else
+      memcpy(p, "_.__", len);
+      *(p+len) = 0;
+#endif
+        set_label_text_safe(ui_speed_screen.speed, p, 0);
+    }
+}
+
+static void gps_info_cb(lv_timer_t *timer) {
+    ILOG(TAG, "[%s]", __func__);
+    char str[64] = {0}, *p = str;
+    const struct gps_context_s *gps = &m_app_ctx.ctx->gps;
+    const struct ubx_config_s *ubx_dev = gps->ubx_device;
+    const char * gpsstr = ubx_dev ? ubx_chip_str(ubx_dev) : 0;
+    const lv_img_dsc_t * gps_img = &near_me_bold_48px;
+    if(!gpsstr) {
+        p=str;
+        memcpy(p, "NO GPS YET", 6), p += 6;
+    }
+    else if(!strcmp(gpsstr, "UNKNOWN")) {
+        p=str;
+        memcpy(p, "GPS", 3), p += 3;
+        if(ubx_dev->ready && rtc_config.hw_type == UBX_HW_TYPE_DEFAULT) {
+            memcpy(p, " -", 2), p += 2;
+            gps_img = &near_me_disabled_bold_48px;
+        }
+    }
+    else {
+        p += strlen(gpsstr);
+        memcpy(&str[0], gpsstr, p-&str[0]);
+        *p++ = '@';
+        p += xltoa(rtc_config.output_rate, p);
+        memcpy(p, "Hz", 2), p += 2;
+    }
+    *p = 0;
+    
+    set_screen_img(ui_info_screen.info_img, gps_img, 0);
+    set_label_text_safe(ui_info_screen.info_lbl, &str[0], 0);
+    update_gps_info_row_str(ubx_dev, &str[0]);
+    set_label_text_safe(ui_info_screen.info_secondary_lbl, &str[0], 1);
+    update_gps_desc_row_str(gps, &str[0]);
+    set_label_text_safe(ui_info_screen.info_third_lbl, &str[0], 1);
+}
+
+static void wifi_info_cb(lv_timer_t *timer) {
+    ILOG(TAG, "[%s]", __func__);
+#if defined(CONFIG_LOGGER_WIFI_ENABLED)
+    char str[64] = {0}, *p = str;
+    struct m_wifi_context *wctx = m_app_ctx.wifi_ctx;
+    if(wctx->s_ap_connection) {
+        memcpy(p, wctx->ap.ssid, strlen(wctx->ap.ssid)), p += strlen(wctx->ap.ssid);
+    }
+    if (wctx->s_sta_connection && wctx->s_sta_connected) {
+        if(wctx->s_ap_connection) memcpy(p, " / ", 3), p += 3;
+        memcpy(p, wctx->stas[wctx->s_sta_num_connect].ssid, strlen(wctx->stas[wctx->s_sta_num_connect].ssid)), p += strlen(wctx->stas[wctx->s_sta_num_connect].ssid);
+    }
+    set_label_text_safe(ui_info_screen.info_lbl, &str[0], 0);
+    str[0] = 0;
+    p = str;
+    if(wctx->s_ap_connection || wctx->s_sta_connection) {
+        memcpy(p, wctx->hostname, strlen(wctx->hostname)), p += strlen(wctx->hostname);
+        memcpy(p, ".local", 11), p+=11;
+    }
+    set_label_text_safe(ui_info_screen.info_lbl, &str[0], 1);
+    str[0] = 0;
+    p = str;
+    if(wctx->s_ap_connection) memcpy(p, "password", 11), p+=11;
+    *p = 0;
+    set_label_text_safe(ui_info_screen.info_lbl, &str[0], 1);
+    #endif
 }
 
 static void statusbar_time_cb(lv_timer_t *timer) {
@@ -525,14 +665,14 @@ static void statusbar_time_cb(lv_timer_t *timer) {
 #if (C_LOG_LEVEL < 2)
             DLOG(TAG, "** [%s] (date)time: %s {d: %d, m:%d, y:%d} ** \n", __func__, tmp, tm->tm_mday, tm->tm_mon, tm->tm_year);
 #endif
-        if(strcmp(lv_label_get_text(panel), &(tmp[0]))) {
-            lv_label_set_text(panel, &(tmp[0]));
-        }
+        set_label_text_safe(panel, &tmp[0], 0);
     }
 }
 
 static void statusbar_temp_cb(lv_timer_t *timer) {
-    ILOG(TAG, "[%s]", __func__);
+#if (C_LOG_LEVEL < 2)
+   ILOG(TAG, "[%s]", __func__);
+#endif
 #if defined(STATUS_PANEL_V1)
     ui_status_panel_t * statusbar = &ui_status_panel;
     if(!statusbar->parent) {
@@ -546,25 +686,22 @@ static void statusbar_temp_cb(lv_timer_t *timer) {
     if ((panel = statusbar->temp_label)) {
 #if defined(CONFIG_BMX_ENABLE)
         size_t len = temp_to_char(p);
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL > 1)
-        if(!len && (len == 3 && *p == '-' && *p+2 == '-')) {
+#if (C_LOG_LEVEL > 1)
+        if(!len || (len == 3 && *p == '-' && *p+2 == '-')) {
 #else
         if (!len) {
 #endif
-            if (!lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN))
-                lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
+            p = 0;
         }
-        else {
-            if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN))
-                lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
-            lv_label_set_text(panel, p);
-        }
+        set_label_text_safe(panel, p, 1);
 #endif
     }
 }
 
 static void statusbar_bat_cb(lv_timer_t *timer) {
+#if (C_LOG_LEVEL < 2)
     ILOG(TAG, "[%s]", __func__);
+#endif
 #if defined(STATUS_PANEL_V1)
     ui_status_panel_t * statusbar = &ui_status_panel;
     if(!statusbar->parent) {
@@ -585,11 +722,10 @@ static void statusbar_bat_cb(lv_timer_t *timer) {
                 : 51;
 #endif
     if ((panel = statusbar->bat_label)) {
+
         if(full<100) *p++=' ';
         p += bat_to_char(p, full > 100 ? 100 : full);
-        r = lv_label_get_text(panel);
-        if(!r || memcmp(r,&tmp[0],4))
-            lv_label_set_text(panel, tmp);
+        set_label_text_safe(panel, &tmp[0], 0);
     }
 
     if ((panel = statusbar->bat_image)) {
@@ -600,7 +736,7 @@ static void statusbar_bat_cb(lv_timer_t *timer) {
                 : full < 101 ? LV_SYMBOL_BATTERY_FULL
                 : full < 110 ? LV_SYMBOL_CHARGE
                             : LV_SYMBOL_USB;
-        lv_label_set_text(panel, s);
+        set_label_text_safe(panel,s, 0);
 // #if !defined(CONFIG_LCD_IS_EPD)
 //         lv_obj_set_style_text_color(panel, full>20 ? lv_color_hex(0xFFFFFF) : full>10 ? lv_color_hex(0xEECE44) : lv_color_hex(0xE32424), LV_PART_MAIN | LV_STATE_DEFAULT );
 //         lv_obj_set_style_text_opa(panel, 255, LV_PART_MAIN| LV_STATE_DEFAULT);
@@ -619,8 +755,16 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
     lv_statusbar_t * statusbar = (lv_statusbar_t *)ui_StatusPanel;
 #endif
     const struct main_ctx_s *ctx = 0;
-    if(timer)
+    if(timer){
         ctx = timer->user_data;
+        speed_info_bar_update_low_speed_seconds();
+        if(ctx->cur_screen == CUR_SCREEN_GPS_SPEED) {
+            speed_info_bar_update();
+        }
+        else if(ctx->cur_screen == CUR_SCREEN_GPS_INFO) {
+            gps_info_cb(timer);
+        }
+    }
     else
         ctx = &m_app_ctx;
     if(!ctx || ! ctx->ctx || !ctx->ctx->gps.ubx_device) return;
@@ -659,10 +803,7 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
                 p += xltoa(numsat, p);
                 *p = 0;
             }
-            p = lv_label_get_text(panel);
-            if(!p || strcmp(p, &(tmp[0]))) {
-                lv_label_set_text(panel, &(tmp[0]));
-            }
+            set_label_text_safe(panel, &tmp[0], 0);
     //   }
     //     else {
     //         p = lv_label_get_text(panel);
@@ -692,10 +833,11 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
     // }
 }
 
-lv_timer_t * gps_timer = 0;
-lv_timer_t * time_timer = 0;
-lv_timer_t * bat_timer = 0;
-lv_timer_t * temp_timer = 0;
+static lv_timer_t * gps_timer = 0;
+static lv_timer_t * time_timer = 0;
+static lv_timer_t * bat_timer = 0;
+static lv_timer_t * temp_timer = 0;
+static lv_timer_t * gps_speed_timer = 0;
 
 void update_lv_timers() {
     ILOG(TAG, "[%s]", __func__);
@@ -704,28 +846,53 @@ void update_lv_timers() {
         statusbar_bat_cb(0);
     }
     else {
-        if(!gps_timer && m_app_ctx.app_mode == APP_MODE_GPS) {
-            gps_timer = lv_timer_create(statusbar_gps_cb, 1000, &m_app_ctx);
-        }
-        else if(gps_timer && m_app_ctx.app_mode != APP_MODE_GPS) {
-            lv_timer_del(gps_timer);
-            gps_timer = 0;
+        if(m_app_ctx.app_mode == APP_MODE_GPS) {
+            if(m_app_ctx.cur_screen == CUR_SCREEN_GPS_SPEED) {
+                if(!gps_speed_timer) {
+                    gps_speed_timer = lv_timer_create(speed_cb, SEC_TO_MS(0.5f), 0);
+                }
+                else if(!display_state.speed_timer_status) {
+                    lv_timer_resume(gps_speed_timer);
+                }
+                if(!display_state.speed_timer_status) {
+                    display_state.speed_timer_status = 1;
+                }
+            }
+            else {
+                if(gps_speed_timer && display_state.speed_timer_status) {
+                    lv_timer_pause(gps_speed_timer);
+                    display_state.speed_timer_status = 0;
+                }
+            }
+            if(!gps_timer) {
+                gps_timer = lv_timer_create(statusbar_gps_cb, SEC_TO_MS(1), &m_app_ctx);
+            }
+        } else { 
+            if(gps_timer) {
+                lv_timer_del(gps_timer);
+                gps_timer = 0;
+            }
+            if(gps_speed_timer) {
+                lv_timer_del(gps_speed_timer);
+                gps_speed_timer = 0;    
+            }
         }
         if(!time_timer) {
             statusbar_time_cb(0);
-            time_timer = lv_timer_create(statusbar_time_cb, 1000, &m_app_ctx);
+            time_timer = lv_timer_create(statusbar_time_cb, SEC_TO_MS(1), &m_app_ctx);
         }
         if(!bat_timer) {
             statusbar_bat_cb(0);
-            bat_timer = lv_timer_create(statusbar_bat_cb, 1000, &m_app_ctx);
+            bat_timer = lv_timer_create(statusbar_bat_cb, SEC_TO_MS(1), &m_app_ctx);
         }
 #if defined(CONFIG_BMX_ENABLE)
-        if(!temp_timer) temp_timer = lv_timer_create(statusbar_temp_cb, 1000, 0);
+        if(!temp_timer) temp_timer = lv_timer_create(statusbar_temp_cb, SEC_TO_MS(1), 0);
 #endif
     }
 }
 
 void stop_lv_timers() {
+    ILOG(TAG, "[%s]", __func__);
     if(gps_timer) {
         lv_timer_del(gps_timer);
         gps_timer = 0;
@@ -737,6 +904,10 @@ void stop_lv_timers() {
     if(bat_timer) {
         lv_timer_del(bat_timer);
         bat_timer = 0;
+    }
+    if(gps_speed_timer) {
+        lv_timer_del(gps_speed_timer);
+        gps_speed_timer = 0;
     }
 #if defined(CONFIG_BMX_ENABLE)
     if(temp_timer) {
@@ -772,33 +943,33 @@ static void update_sat_count(const struct ubx_config_s *ubx_dev) {
         if((sat->flags & 0x08) == 0 || (sat->flags & 0x07) < 4)
             continue;
         switch(sat->gnssId) {
-            case 0:
-                display_state.sat_count.gps++;
+            case UBX_GNSS_GPS:
+                ++display_state.sat_count.gps;
                 break;
-            case 1:
-                display_state.sat_count.sbas++;
+            case UBX_GNSS_SBAS:
+                ++display_state.sat_count.sbas;
                 break;
-            case 2:
-                display_state.sat_count.galileo++;
+            case UBX_GNSS_GALILEO:
+                ++display_state.sat_count.galileo;
                 break;
-            case 3:
-                display_state.sat_count.beidou++;
+            case UBX_GNSS_BEIDOU:
+                ++display_state.sat_count.beidou;
                 break;
-            case 5:
-                display_state.sat_count.qzss++;
+            case UBX_GNSS_QZSS:
+                ++display_state.sat_count.qzss;
                 break;
-            case 6:
-                display_state.sat_count.glonass++;
+            case UBX_GNSS_GLONASS:
+                ++display_state.sat_count.glonass;
                 break;
-            case 7:
-                display_state.sat_count.navic++;
+            case UBX_GNSS_NAVIC:
+                ++display_state.sat_count.navic;
                 break;
             default:
                 break;
         }
     }
-#if (C_LOG_LEVEL < 2)
-    ILOG(TAG, "gnss: %hhu, count: %hhu, G:%d, S:%d, E:%d, B:%d, Q:%d, R:%d, N:%d", ubx_dev->rtc_conf->gnss, nav_sat->numSvs, display_state.sat_count.gps, display_state.sat_count.sbas, display_state.sat_count.galileo, display_state.sat_count.beidou, display_state.sat_count.qzss, display_state.sat_count.glonass, display_state.sat_count.navic);
+#if (C_LOG_LEVEL < 3)
+    ILOG(TAG, "gnss: %hhu, count: %hhu, G:%hhu, S:%hhu, E:%hhu, B:%hhu, Q:%hhu, R:%hhu, N:%hhu", rtc_config.gnss, nav_sat->numSvs, display_state.sat_count.gps, display_state.sat_count.sbas, display_state.sat_count.galileo, display_state.sat_count.beidou, display_state.sat_count.qzss, display_state.sat_count.glonass, display_state.sat_count.navic);
 #endif
 }
 
@@ -808,30 +979,30 @@ static size_t update_gps_info_row_str(const struct ubx_config_s *ubx_dev, char *
     if(ubx_dev->config_progress) {
         memcpy(pc, "initializing", 12), pc += 12;
     } else if(ubx_dev->ready) {
-        if(ubx_dev->rtc_conf->hw_type == UBX_HW_TYPE_DEFAULT) {
+        if(rtc_config.hw_type == UBX_HW_TYPE_DEFAULT) {
             memcpy(pc, "gps not found", 13), pc += 13;
             goto end;
         }
         update_sat_count(ubx_dev);
-        uint8_t gnss = ubx_dev->rtc_conf->gnss;
+        uint8_t gnss = rtc_config.gnss;
         pc += xultoa(ubx_dev->ubx_msg.navPvt.numSV, pc);
-        memcpy(pc, "sat", 3), pc += 3;
-        if((gnss & (1 << 0))!=0) {
+        memcpy(pc, " sat", 4), pc += 4;
+        if(BIT_GET(gnss, UBX_GNSS_GPS)!=0) {
             *pc++ = ' ';
             *pc++ = 'G';
             pc += xultoa(display_state.sat_count.gps, pc);
         }
-        if((gnss & (1 << 2))!=0) {
+        if(BIT_GET(gnss, UBX_GNSS_GALILEO)!=0) {
             *pc++ = ' ';
             *pc++ = 'E';
             pc += xultoa(display_state.sat_count.galileo, pc);
         }
-        if((gnss & (1 << 3))!=0) {
+        if(BIT_GET(gnss, UBX_GNSS_BEIDOU)!=0) {
             *pc++ = ' ';
             *pc++ = 'B';
             pc += xultoa(display_state.sat_count.beidou, pc);
         }
-        if((gnss & (1 << 6))!=0) {
+        if(BIT_GET(gnss, UBX_GNSS_GLONASS)!=0) {
             *pc++ = ' ';
             *pc++ = 'R';
             pc += xultoa(display_state.sat_count.glonass, pc);
@@ -856,9 +1027,10 @@ static size_t update_gps_desc_row_str(const struct gps_context_s * gps, char * p
         *pb++ = 's';
     }
     if(gps->lost_frames) {
-        memcpy(pb, " lst: ", 6), pb += 6;
-        pb += xultoa(gps->lost_frames, pb), *pb=0;
+        memcpy(pb, " l: ", 4), pb += 4;
+        pb += xultoa(gps->lost_frames, pb);
     }
+    *pb = 0;
     return pb - p;
 }
 
@@ -875,7 +1047,6 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
         bool is_gps_stat_screen = (screen_mode > 0 && screen_mode < 10);
         display_state.update_delay = 500;
         // ESP_LOGI(TAG, "update screen: mode:%" PRIu8 ", update nr:%lu", screen_mode, buf_update_count);
-        float gpsspd;
         int state = (int)arg;
         lv_obj_t *panel, *parent;
         stat_screen_t *sc_data = 0;
@@ -911,36 +1082,13 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 break;
             case SCREEN_MODE_GPS_INIT:
             case SCREEN_MODE_GPS_READY:
-                gpsstr = ubx_dev ? ubx_chip_str(ubx_dev) : 0;
-                if(!gpsstr) {
-                    p=str;
-                    memcpy(p, "NO GPS YET", 6), p += 6;
-                }
-                else if(!strcmp(gpsstr, "UNKNOWN")) {
-                    p=str;
-                    memcpy(p, "GPS", 3), p += 3;
-                    if(ubx_dev->ready && ubx_dev->rtc_conf->hw_type == UBX_HW_TYPE_DEFAULT) {
-                        img_src = &near_me_disabled_bold_48px;
-                        memcpy(p, " -", 2), p += 2;
-                    }
-                }
-                else {
-                    p += strlen(gpsstr);
-                    memcpy(&str[0], gpsstr, p-&str[0]);
-                    *p++ = '@';
-                    p += xltoa(ubx_dev->rtc_conf->output_rate, p);
-                    memcpy(p, "Hz", 2), p += 2;
-                }
-                *p = 0;
                 
-                uint32_t now = get_millis();
-                if(now > display_state.next_gps_str_update) {
-                    display_state.next_gps_str_update = now + 2000;
-                    update_gps_info_row_str(ubx_dev, &display_state.bat_status_str[0]);
-                    update_gps_desc_row_str(&m_app_ctx.ctx->gps, &display_state.gps_status_str[0]);
-                }
+#if defined(CONFIG_LCD_IS_EPD)
                 ui_set_main_cnt_offset(&ui_info_screen.screen, offset);
-                showGpsScreen(&str[0], &display_state.bat_status_str[0], &display_state.gps_status_str[0], img_src, display_state.gps_image_angle);
+#endif
+                if (showGpsScreen(display_state.gps_image_angle)) {
+                    gps_info_cb(0);
+                }
                 // statusbar_update();
 
 // #if !defined(CONFIG_LCD_IS_EPD)
@@ -971,12 +1119,14 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 break;
             case SCREEN_MODE_LOW_BAT:
                 link_for_low_bat:
-                showLowBatScreen();
+                showLowBatScreen(0);
                 break;
             case SCREEN_MODE_FW_UPDATE:
                 const v_settings_t *s = arg;
                 const struct m_config_item_s *i = (const struct m_config_item_s *)s->settings_data;
+#if defined(CONFIG_LCD_IS_EPD)
                 ui_set_main_cnt_offset(&ui_info_screen.screen, offset);
+#endif
                 showFwUpdateScreen(s->name, i->name, i->desc);
                 break;
             case SCREEN_MODE_SHUT_DOWN:
@@ -992,12 +1142,10 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 } else {
                     //current_screen_mode = SCREEN_MODE_OFF_SCREEN;
                     if(!title) {
-                        float session_time = avail_fields[59].value.num();
-                        float distance = avail_fields[41].value.num();
                         memcpy(pb, "Time: ", 6), pb += 6;
-                        sec_to_hms_str(session_time, pb);
+                        avail_fields[fld_total_time_hms].value.timestr(pb);
                         memcpy(pc, "Distance: ", 10), pc += 10;
-                        pc += f2_to_char(distance, pc);
+                        pc += f2_to_char(avail_fields[fld_distance].value.num(), pc);
                         memcpy(pc, " km", 3), pc+=3, *pc = 0;
                         showSaveSessionScreen(&str[0], &str1[0], &str2[0]);
                     }
@@ -1033,30 +1181,14 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 break;
             case SCREEN_MODE_SPEED_1:
             link_for_screen_mode_speed_2:
-                gpsspd = gps_last_speed_smoothed(2) * c_gps_cfg.speed_calibration;
-                if (!ubx_dev || !ubx_dev->ready || !gps->signal_ok) {
-                    memcpy(p, "-.--", 4);
-                    *(p+4) = 0;
-                }
-#if defined(CONFIG_GPS_LOG_ENABLED)
-                else if(gps->S2.avg_s < 1000) {
-                    memcpy(p, "0.00", 4);
-                    *(p+4) = 0;
-                }
-#endif
-                else {
-                    display_state.update_delay = 100;
-                    if(gpsspd < 100)
-                        f2_to_char(gpsspd, p);
-                    else
-                        f1_to_char(gpsspd, p);
-                }
+#if defined(CONFIG_LCD_IS_EPD)
                 if(display_state.update_delay>100)
                     ui_set_main_cnt_offset(&ui_speed_screen.screen, offset);
-                showSpeedScreen();
-                panel = ui_speed_screen.speed;
-                lv_label_set_text(panel, p);
-                speed_info_bar_update();
+#endif
+                if(showSpeedScreen()) {
+                    speed_cb(0);
+                    speed_info_bar_update();
+                }
                 // statusbar_update();
 
                 break;
@@ -1124,33 +1256,12 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 DLOG(TAG, "[%s] %s, wifi %d\n", __func__, scr_mode_str, screen_mode);
 #endif
                 display_state.update_delay = 600;
-#if defined(CONFIG_LOGGER_WIFI_ENABLED)
-                struct m_wifi_context *wctx = m_app_ctx.wifi_ctx;
-                if(wctx->s_ap_connection) {
-                    memcpy(p, wctx->ap.ssid, strlen(wctx->ap.ssid)), p += strlen(wctx->ap.ssid);
-                    // pb += sprintf(pb, "%hhu.%hhu.%hhu.%hhu", wctx->ap.ipv4_address[0], wctx->ap.ipv4_address[1], wctx->ap.ipv4_address[2], wctx->ap.ipv4_address[3]);
-                }
-                if (wctx->s_sta_connection && wctx->s_sta_connected) {
-                    if(wctx->s_ap_connection) memcpy(p, " / ", 3), p += 3;
-                    memcpy(p, wctx->stas[wctx->s_sta_num_connect].ssid, strlen(wctx->stas[wctx->s_sta_num_connect].ssid)), p += strlen(wctx->stas[wctx->s_sta_num_connect].ssid);
-                    // if(wctx->s_ap_connection) memcpy(pb, " / ", 3), pb += 3;
-                    // sprintf(pb, "%hhu.%hhu.%hhu.%hhu", wctx->stas[wctx->s_sta_num_connect].ipv4_address[0], wctx->stas[wctx->s_sta_num_connect].ipv4_address[1], wctx->stas[wctx->s_sta_num_connect].ipv4_address[2], wctx->stas[wctx->s_sta_num_connect].ipv4_address[3]), pb+=strlen(pb);
-                }
-                if(wctx->s_ap_connection || wctx->s_sta_connection) {
-                    memcpy(pb, wctx->hostname, strlen(wctx->hostname)), pb += strlen(wctx->hostname);
-                    memcpy(pb, ".local", 11), pb+=11;
-                }
-                if(wctx->s_ap_connection) memcpy(pc, "password", 11), pc+=11;
-                *pc = 0;
-#endif
+#if defined(CONFIG_LCD_IS_EPD)
                 ui_set_main_cnt_offset(&ui_info_screen.screen, offset);
-                
-                showWifiScreen(&str[0], &str1[0], &str2[0]);
-                // statusbar_update();
-#if !defined(CONFIG_LCD_IS_EPD)
-                lv_obj_set_style_img_recolor(ui_info_screen.info_img, lv_color_hex(0x104951), LV_PART_MAIN | LV_STATE_DEFAULT);
-                lv_obj_set_style_img_recolor_opa(ui_info_screen.info_img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
 #endif
+                if (showWifiScreen())
+                    wifi_info_cb(0);
+                // statusbar_update();
                 break;
             case SCREEN_MODE_RECORD:
                 const struct record_forwarder_s *rec = arg;
@@ -1171,7 +1282,9 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                     const v_settings_t *s = arg;
                     const struct m_config_item_s *i = (const struct m_config_item_s *)s->settings_data;
                     if(!i) goto plain_setting;
+#if defined(CONFIG_LCD_IS_EPD)
                     ui_set_main_cnt_offset(&ui_info_screen.screen, offset);
+#endif
                     showSettingsScreen(s->name, i->name, i->desc);
                 }
                 else {
@@ -1224,7 +1337,9 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
 #endif
                 rows = 3, cols = 1;
             }
+#if defined(CONFIG_LCD_IS_EPD)
             ui_set_main_cnt_offset(&ui_stats_screen.screen, offset);
+#endif
             loadStatsScreen(rows,cols);
             for(c=0; c < cols; c++) {
                 for(r = 0; r < rows; r++) {
@@ -1292,7 +1407,7 @@ uint32_t screen_cb(void* arg) {
     const struct ubx_config_s *ubx_dev = gps->ubx_device;
 #endif
     if(ctx->app_mode == APP_MODE_GPS) {
-        run_is_active = (ctx->config && gps && gps->signal_ok && gps->gps_speed / 1000.0f >= m_app_ctx.config->screen.stat_speed);
+        run_is_active = (ctx->config && gps && gps->signal_ok && MMS_TO_MS(gps->gps_speed) >= m_app_ctx.config->screen.stat_speed);
         if (run_is_active && ctx->next_screen != CUR_SCREEN_NONE){
             ctx->next_screen = CUR_SCREEN_NONE;
         }
@@ -1431,7 +1546,7 @@ uint32_t screen_cb(void* arg) {
             delay=_update_screen(display_state.display, SCREEN_MODE_GPS_INIT, 0);
             ctx->cur_screen = CUR_SCREEN_GPS_INFO;
         }
-        else if (!run_is_active && (gps->S2.display_max_speed  > 1000 || ctx->next_screen == CUR_SCREEN_GPS_STATS)) {
+        else if (!run_is_active && (gps->S2.display_max_speed  > ONE_MS_IN_MMS || ctx->next_screen == CUR_SCREEN_GPS_STATS)) {
             if (gps->record && ctx->record_done == 255) {
                 if(gps->S2.display_max_speed > 10000) // when more than 32k/h show records
                     ctx->record_done=0;
