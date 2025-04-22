@@ -31,24 +31,11 @@ enum speeds_e {
 #else
     BAR_MAX = 240,
 #endif
+    HALF_SEC_IN_MS = 500,
     ONE_K = 1000,
     HALF_H_IN_SECS = 1800,
     ONE_H_IN_SECS = 3600
 };
-
-#define NUM_GE_3_DIG(x) ((x) >= 100)
-#define NUM_LT_3_DIG(x) ((x) < 100)
-#define ONE_MS_IN_MMS ONE_K
-#define FROM_K(x) ((x) / 1000.0f)
-#define TO_K(x) ((x) * 1000.0f)
-#define SEC_TO_HOUR(x) ((x) / 3600.0f)
-#define MMS_TO_MS(x) FROM_K(x)
-#define MM_TO_M(x) FROM_K(x)
-#define M_TO_KM(x) FROM_K(x)
-#define MM_TO_KM(x) ((x) * 1000000.0f)
-#define MS_TO_SEC(x) FROM_K(x)
-#define SEC_TO_MS(x) TO_K(x)
-#define M_TO_MM(x) TO_K(x)
 
 #define MINIMUM_VOLTAGE 3.25
 #define LOW_BAT_COUNT 20

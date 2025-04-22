@@ -99,8 +99,11 @@ esp_err_t init_bmx() {
             .name = "periodic_bmx_timer",
             .arg = NULL
         };
-        ESP_ERROR_CHECK(esp_timer_create(&periodic_timer_args, &bmx_periodic_timer));
-        ESP_ERROR_CHECK(esp_timer_start_periodic(bmx_periodic_timer, 10000000));
+        if(!esp_timer_create(&periodic_timer_args, &bmx_periodic_timer))
+            esp_timer_start_periodic(bmx_periodic_timer, SEC_TO_US(10)); // 10s
+        else {
+            ESP_LOGE(TAG, "[%s] Failed to create periodic timer", __func__);
+        }
         //xTaskCreatePinnedToCore(bmx_task, "bmx_task", BMX_TASK_STACK_SIZE, NULL, 0, &t1, 1);
     }
 

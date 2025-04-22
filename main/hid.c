@@ -218,8 +218,6 @@ static void button_timer_cb(void *arg) {
         if(!m_app_ctx.screen_auto_refresh){
             display_task_resume_for_times(1, -1, -1, false);
         }
-        else
-            display_request_full_refresh(0);
 #endif
     }
     else if(button_clicks==3) {
@@ -312,9 +310,8 @@ static void button_timer_cb(void *arg) {
             }
 #else
 #if defined(CONFIG_DISPLAY_ENABLED)
-            display_request_full_refresh(0);
             if(!m_app_ctx.screen_auto_refresh){
-                display_task_resume_for_times(1, -1, -1, false);
+                display_task_resume_for_times(1, -1, 1, false);
             }
 #endif
 #endif
@@ -418,7 +415,7 @@ void init_button() {
         .name = "btn_tmr",
         .arg = 0
     };
-    ESP_ERROR_CHECK(esp_timer_create(&button_timer_args, &button_timer));
+    esp_timer_create(&button_timer_args, &button_timer);
 }
 void deinit_button() {
     ILOG(TAG, "[%s]", __func__);
