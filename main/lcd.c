@@ -1,3 +1,5 @@
+#include "gps_log.h"
+#include "logger_common.h"
 #include "private.h"
 
 #include "lcd.h"
@@ -75,8 +77,7 @@ struct display_state_s {
     uint8_t speed_timer_status;
 };
 
-static struct display_s display;
-static struct display_state_s display_state = { &display, 0, {0, 0, 0, 0, 0, 0, 0},
+static struct display_state_s display_state = { &m_app_ctx.display, 0, {0, 0, 0, 0, 0, 0, 0},
 #if defined(CONFIG_BMX_ENABLE) 
 0, 
 #endif
@@ -120,18 +121,18 @@ static const char *scr_fld[2][8][2] = {
     {
         {"Run", "Avg"},
         {"Gate", "Ex"},
-        {"AlpR", "AlpM"},
-        {"NmR", "NmM"},
+        {"Al", "AlM"},
+        {"Nm", "NmM"},
         {"Dst", "500M"},
-        {"2sM", "10sM"},
-        {".5hR", ".5hM"},
-        {"1hR", "1hM"},
+        {"2s", "10s"},
+        {".5h", ".5hM"},
+        {"1h", "1hM"},
     },
     {
         {"R", "A"},
         {"G", "E"},
-        {"AlR", 0},
-        {"NmR", ""},
+        {"Al", 0},
+        {"Nm", ""},
         {0, 0},
         {0, 0},
         {0, 0},
@@ -166,8 +167,9 @@ size_t append_dots(char * p, uint8_t max_dots, uint8_t * cur_dots) {
 // static void statusbar_update();
 
 static uint32_t _sleep_screen(const struct display_s *me, int choice) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __func__);
-
+#endif
     char tmp[24], *p = tmp;
     lv_label_t *panel;
     // if (_lvgl_lock(50)) {
@@ -554,7 +556,9 @@ static void speed_info_bar_update_low_speed_seconds(void) {
  * @param timer Pointer to the timer triggering this callback.
  */
 static void speed_cb(lv_timer_t *timer) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __func__);
+#endif
     const struct gps_context_s *gps = &m_app_ctx.ctx->gps;
     const struct ubx_config_s *ubx_dev = gps->ubx_device;
     char str[8] = {0}, *p = str;
@@ -593,7 +597,9 @@ static void speed_cb(lv_timer_t *timer) {
  * @param timer Pointer to the timer triggering this callback.
  */
 static void gps_info_cb(lv_timer_t *timer) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __func__);
+#endif
     char str[64] = {0}, *p = str;
     const struct gps_context_s *gps = &m_app_ctx.ctx->gps;
     const struct ubx_config_s *ubx_dev = gps->ubx_device;
@@ -636,7 +642,9 @@ static void gps_info_cb(lv_timer_t *timer) {
  * @param timer Pointer to the timer triggering this callback.
  */
 static void wifi_info_cb(lv_timer_t *timer) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __func__);
+#endif
 #if defined(CONFIG_LOGGER_WIFI_ENABLED)
     char str[64] = {0}, *p = str;
     size_t len = 0;
@@ -677,7 +685,9 @@ static void wifi_info_cb(lv_timer_t *timer) {
  * @param timer Pointer to the timer triggering this callback.
  */
 static void statusbar_time_cb(lv_timer_t *timer) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __func__);
+#endif
 #if defined(STATUS_PANEL_V1)
     ui_status_panel_t * statusbar = &ui_status_panel;
     if(!statusbar->parent) {
@@ -812,7 +822,9 @@ static void statusbar_bat_cb(lv_timer_t *timer) {
  * @param timer Pointer to the timer triggering this callback.
  */
 static void statusbar_gps_cb(lv_timer_t *timer) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __func__);
+#endif
 #if defined(STATUS_PANEL_V1)
     ui_status_panel_t * statusbar = &ui_status_panel;
     if(!statusbar->parent) {
@@ -907,7 +919,9 @@ static lv_timer_t * temp_timer = 0;
 static lv_timer_t * gps_speed_timer = 0;
 
 void update_lv_timers() {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __func__);
+#endif
     if(m_app_ctx.app_mode == APP_MODE_SLEEP) {
         statusbar_time_cb(0);
         statusbar_bat_cb(0);
@@ -916,7 +930,7 @@ void update_lv_timers() {
         if(m_app_ctx.app_mode == APP_MODE_GPS) {
             if(m_app_ctx.cur_screen == CUR_SCREEN_GPS_SPEED) {
                 if(!gps_speed_timer) {
-                    gps_speed_timer = lv_timer_create(speed_cb, HALF_SEC_IN_MS, 0);
+                    gps_speed_timer = lv_timer_create(speed_cb, QUATER_SEC_IN_MS, 0);
                 }
                 else if(!display_state.speed_timer_status) {
                     lv_timer_resume(gps_speed_timer);
@@ -959,7 +973,9 @@ void update_lv_timers() {
 }
 
 void stop_lv_timers() {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __func__);
+#endif
     if(gps_timer) {
         lv_timer_del(gps_timer);
         gps_timer = 0;
@@ -1004,11 +1020,12 @@ static void update_sat_count(const struct ubx_config_s *ubx_dev) {
     memset(&(display_state.sat_count), 0, sizeof(sat_count_t));
     for(uint8_t i=0; i < nav_sat->numSvs; i++) {
         sat = &nav_sat->sat[i];
-#if (C_LOG_LEVEL < 2)
+#if (C_LOG_LEVEL < 1)
         DLOG(TAG, "sat[%hhu]: %hhu, %hhu, %hhu, %hhu, %hu, %lu %lu %lu\n", i, sat->gnssId, sat->svId, sat->cno, sat->elev, sat->azim, sat->flags, (sat->flags & 0x08), (sat->flags & 0x07));
 #endif
-        if((sat->flags & 0x08) == 0 || (sat->flags & 0x07) < 4)
+        if((sat->flags & 0x08u) == 0 || (sat->flags & 0x07u) < 4) {
             continue;
+        }
         switch(sat->gnssId) {
             case UBX_GNSS_GPS:
                 ++display_state.sat_count.gps;
@@ -1090,7 +1107,7 @@ static size_t update_gps_desc_row_str(const struct gps_context_s * gps, char * p
     memcpy(pb, "V ", 2), pb += 2;
     if(gps->first_fix){
         memcpy(pb, " fx: ", 5), pb += 5;
-        pb += xultoa(gps->first_fix, pb);
+        pb += xultoa(MS_TO_SEC(gps->first_fix), pb);
         *pb++ = 's';
     }
     if(gps->lost_frames) {
@@ -1112,7 +1129,7 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
         logger_config_t *config = m_app_ctx.config;
         char str[24] = {0}, *p = str, str1[32]={0}, *pb = str1, str2[32]={0}, *pc = str2;
         bool is_gps_stat_screen = (screen_mode > 0 && screen_mode < 10);
-        display_state.update_delay = 500;
+        display_state.update_delay = 50;
         // ESP_LOGI(TAG, "update screen: mode:%" PRIu8 ", update nr:%lu", screen_mode, buf_update_count);
         int state = (int)arg;
         int isnew = 0;
@@ -1244,13 +1261,12 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                     showBlankScreen(0);
                  }
 #endif
-                if (buf_update_count < 2) display_state.update_delay = 100;
+                display_state.update_delay = 350;
                 break;
             case SCREEN_MODE_SPEED_1:
             link_for_screen_mode_speed_2:
 #if defined(CONFIG_LCD_IS_EPD)
-                if(display_state.update_delay>100)
-                    ui_set_main_cnt_offset(&ui_speed_screen.screen, offset);
+                ui_set_main_cnt_offset(&ui_speed_screen.screen, offset);
 #endif
                 isnew = showSpeedScreen();
                 if(isnew) {
@@ -1322,7 +1338,7 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
 #if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] %s, wifi %d\n", __func__, scr_mode_str, screen_mode);
 #endif
-                display_state.update_delay = 600;
+                // display_state.update_delay = 100;
 #if defined(CONFIG_LCD_IS_EPD)
                 ui_set_main_cnt_offset(&ui_info_screen.screen, offset);
 #endif
@@ -1344,6 +1360,7 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                     panel = ui_record_screen.info_lbl;
                     lv_label_set_text(panel, rec->cur->grp);
                 }
+                display_state.update_delay = 800;
                 break;
             case SCREEN_MODE_SETTINGS:
                 if(arg) {
@@ -1449,13 +1466,14 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
 }
 
 uint32_t screen_cb(void* arg) {
+
     main_ctx_t *ctx = &m_app_ctx;
     // const uint32_t lcd_count = get_lcd_ui_count();
     uint32_t buf_update_count = display_get_buf_update_count();
 #if (C_LOG_LEVEL < 2)
     ILOG(TAG, "[%s] %ld app_mode: %s, cur_screen: %s, next_screen: %s", __func__, buf_update_count, app_mode_str[ctx->app_mode], cur_screen_str[ctx->cur_screen], cur_screen_str[ctx->next_screen]);
-#endif
     DMEAS_START();
+#endif
     // struct display_s *dspl = &display;
     uint32_t delay=0;
     if(!display_state.display || !display_state.display->op) {
@@ -1529,7 +1547,7 @@ uint32_t screen_cb(void* arg) {
         _sleep_screen(display_state.display, 0);
         ctx->cur_screen = CUR_SCREEN_SLEEP_SCREEN;
         display_state.old_screen_mode = SCREEN_MODE_SLEEP;
-        display_incr_buf_update_count();
+        // display_incr_buf_update_count();
         goto end;
     }
     else if ((!m_app_ctx.screen_auto_refresh && display_get_buf_update_count() < 2) || ctx->app_mode == APP_MODE_BOOT) {
@@ -1549,10 +1567,12 @@ uint32_t screen_cb(void* arg) {
 
     else if(m_app_ctx.low_bat_countdown) {
         delay=_update_screen(display_state.display, SCREEN_MODE_LOW_BAT, 0);
+        ctx->cur_screen = CUR_SCREEN_LOW_BAT;
         goto end;
     }
     else if(!m_app_ctx.ctx->sdOK) {
         delay=_update_screen(display_state.display, SCREEN_MODE_SD_TROUBLE, 0);
+        ctx->cur_screen = CUR_SCREEN_SD_TROUBLE;
         goto end;
     }
     
@@ -1597,64 +1617,64 @@ uint32_t screen_cb(void* arg) {
 #endif
     else if (ctx->app_mode == APP_MODE_GPS) {
 #if (defined(CONFIG_UBLOX_ENABLED) && defined(CONFIG_GPS_LOG_ENABLED))
-        if (ubx_dev && gps && gps->time_set && (ubx_dev->ubx_msg.navPvt.iTOW - gps->old_nav_pvt_itow) > (gps->time_out_gps_msg * 5) && ctx->next_screen == CUR_SCREEN_NONE) {
+        if (gps_read_msg_timeout() && gps->first_fix < (get_millis()-SEC_TO_MS(10)) && ctx->next_screen == CUR_SCREEN_NONE) {
             gpstrblscr:
             delay=_update_screen(display_state.display, SCREEN_MODE_GPS_TROUBLE, 0);  // gps signal lost !!!
             ctx->cur_screen = CUR_SCREEN_GPS_TROUBLE;
-        } else if ((ctx->next_screen != CUR_SCREEN_GPS_STATS && (!ubx_dev || !ubx_dev->ready || (ubx_dev->ready && !ubx_dev->ubx_msg.mon_ver.hwVersion[0]))) || (!run_is_active && ctx->next_screen == CUR_SCREEN_GPS_INFO)) {
+        } else if ((ctx->next_screen != CUR_SCREEN_GPS_STATS && (!ubx_dev || !gps_has_version_set())) || (!run_is_active && ctx->next_screen == CUR_SCREEN_GPS_INFO)) {
             // if(!ubx_dev->ubx_msg.mon_ver.hwVersion[0]) goto bootscreen;
             delay=_update_screen(display_state.display, SCREEN_MODE_GPS_INIT, 0);
             ctx->cur_screen = CUR_SCREEN_GPS_INFO;
         }
         else if (!run_is_active && (gps->S2.display_max_speed  > ONE_M_S_IN_MM_S || ctx->next_screen == CUR_SCREEN_GPS_STATS)) {
-            if (gps->record && ctx->record_done == 255) {
+            if (gps->record && ctx->record_done == RECORD_DONE_END) {
                 if(gps->S2.display_max_speed > 10000) // when more than 32k/h show records
-                    ctx->record_done=0;
+                    ctx->record_done=RECORD_DONE_START;
                 gps->record = 0;
             }
-            if (gps->S10.record && ctx->record_done < 2) { // 10sec max record
-                struct record_forwarder_s r = { &avail_fields[16], &avail_fields[17], ctx->record_done==0};
+            if (gps->S10.record && ctx->record_done < RECORD_DONE_2) { // 10sec max record
+                struct record_forwarder_s r = { &avail_fields[16], &avail_fields[17], ctx->record_done==RECORD_DONE_START};
                 delay=_update_screen(display_state.display, SCREEN_MODE_RECORD, &r);
                 ++ctx->record_done;
                 goto end;
             }
-            else if (gps->S2.record && ctx->record_done < 4) { // 2sec max record
-                if(ctx->record_done<2) ctx->record_done = 2;
-                struct record_forwarder_s r = { &avail_fields[47], &avail_fields[48] , ctx->record_done==2};
+            else if (gps->S2.record && ctx->record_done < RECORD_DONE_4) { // 2sec max record
+                if(ctx->record_done<2) ctx->record_done = RECORD_DONE_2;
+                struct record_forwarder_s r = { &avail_fields[47], &avail_fields[48] , ctx->record_done== RECORD_DONE_2};
                 delay=_update_screen(display_state.display, SCREEN_MODE_RECORD, &r);
                 ++ctx->record_done;
                 goto end;
             }
-            else if (gps->M250.record && ctx->record_done < 6) { // 500m max record
-                if(ctx->record_done<4) ctx->record_done = 4;
+            else if (gps->M250.record && ctx->record_done < RECORD_DONE_6) { // 500m max record
+                if(ctx->record_done<4) ctx->record_done = RECORD_DONE_4;
                 struct record_forwarder_s r = { &avail_fields[51], &avail_fields[52] , ctx->record_done==4};
                 delay=_update_screen(display_state.display, SCREEN_MODE_RECORD, &r);
                 ++ctx->record_done;
                 goto end;
             }
-            else if (gps->M500.record && ctx->record_done < 8) { // 500m max record
-                if(ctx->record_done<6) ctx->record_done = 6;
-                struct record_forwarder_s r = { &avail_fields[53], &avail_fields[54] , ctx->record_done==6};
+            else if (gps->M500.record && ctx->record_done < RECORD_DONE_8) { // 500m max record
+                if(ctx->record_done<6) ctx->record_done = RECORD_DONE_6;
+                struct record_forwarder_s r = { &avail_fields[53], &avail_fields[54] , ctx->record_done== RECORD_DONE_6};
                 delay=_update_screen(display_state.display, SCREEN_MODE_RECORD, &r);
                 ++ctx->record_done;
                 goto end;
             }
-            else if (gps->M1852.record && ctx->record_done < 10) { // 1852m max record
-                if(ctx->record_done<8) ctx->record_done = 8;
-                struct record_forwarder_s r = { &avail_fields[55], &avail_fields[56] , ctx->record_done==8};
+            else if (gps->M1852.record && ctx->record_done < RECORD_DONE_10) { // 1852m max record
+                if(ctx->record_done<8) ctx->record_done = RECORD_DONE_8;
+                struct record_forwarder_s r = { &avail_fields[55], &avail_fields[56] , ctx->record_done== RECORD_DONE_8};
                 delay=_update_screen(display_state.display, SCREEN_MODE_RECORD, &r);
                 ++ctx->record_done;
                 goto end;
             }
-             else if (gps->A500.record && ctx->record_done < 12) { // 500m alfa max record
-                if(ctx->record_done<10) ctx->record_done = 10;
-                struct record_forwarder_s r = { &avail_fields[42], &avail_fields[43] , ctx->record_done==10};
+             else if (gps->A500.record && ctx->record_done < RECORD_DONE_12) { // 500m alfa max record
+                if(ctx->record_done<10) ctx->record_done = RECORD_DONE_10;
+                struct record_forwarder_s r = { &avail_fields[42], &avail_fields[43] , ctx->record_done== RECORD_DONE_10};
                 delay=_update_screen(display_state.display, SCREEN_MODE_RECORD, &r);
                 ++ctx->record_done;
                 goto end;
             }
-            else if(ctx->record_done < 240) {
-                ctx->record_done = 240;
+            else if(ctx->record_done <  RECORD_DONE_OK) {
+                ctx->record_done =  RECORD_DONE_OK;
             }
             // lower than 5 km/h
             while(m_app_ctx.ctx->stat_screen[m_app_ctx.ctx->stat_screen_cur] == 0) {
@@ -1665,8 +1685,9 @@ uint32_t screen_cb(void* arg) {
             }
             delay=_update_screen(display_state.display, m_app_ctx.ctx->stat_screen_cur+1, 0);
             ctx->cur_screen = CUR_SCREEN_GPS_STATS;
+            display_start_task_pause_seq(); // should be 2 for pause loop
         } else {
-            if(ubx_dev && !ubx_dev->ubx_msg.mon_ver.hwVersion[0] && ubx_dev->ready) goto gpstrblscr;
+            if(ubx_dev && !gps_has_version_set()) goto gpstrblscr;
             if (ctx->config && ctx->config->screen.speed_large_font == 2) {
                 delay=_update_screen(display_state.display, SCREEN_MODE_SPEED_2, 0);
             } else {
@@ -1688,8 +1709,17 @@ uint32_t screen_cb(void* arg) {
         delay_ms(250);
     }
 
+    if((ctx->cur_screen == CUR_SCREEN_GPS_TROUBLE || ctx->cur_screen == CUR_SCREEN_SD_TROUBLE || ctx->cur_screen == CUR_SCREEN_LOW_BAT)) {
+        if(!get_display_timer_period())
+            display_timer_set_period(5);
+    }
+    else if(get_display_timer_period()) {
+        display_timer_set_period(0);
+    }
     update_lv_timers();
+#if (C_LOG_LEVEL < 2)
     DMEAS_END(TAG, "[%s] took: %llu us",  __FUNCTION__);
+#endif
     return delay;
 }
 

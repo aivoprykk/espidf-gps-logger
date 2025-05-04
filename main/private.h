@@ -18,6 +18,9 @@ extern "C" {
 #include "common_log.h"
 
 #include "logger_common.h"
+#ifdef CONFIG_DISPLAY_ENABLED
+#include "display.h"
+#endif
 
 #if (C_LOG_LEVEL < 2)
 extern const char * const app_mode_str[];
@@ -31,6 +34,7 @@ enum speeds_e {
 #else
     BAR_MAX = 240,
 #endif
+    QUATER_SEC_IN_MS = 250,
     HALF_SEC_IN_MS = 500,
     ONE_K = 1000,
     HALF_H_IN_SECS = 1800,
@@ -60,9 +64,73 @@ enum speeds_e {
 #define BUF_SIZE 512
 #endif
 
-#define APP_MODE_LIST(l) l(APP_MODE_UNKNOWN) l(APP_MODE_BOOT) l(APP_MODE_WIFI) l(APP_MODE_GPS) l(APP_MODE_SLEEP) l(APP_MODE_SHUT_DOWN) l(APP_MODE_RESTART)
-#define CUR_SCREEN_LIST(l) l(CUR_SCREEN_NONE) l(CUR_SCREEN_GPS_STATS) l(CUR_SCREEN_GPS_SPEED) l(CUR_SCREEN_GPS_INFO) l(CUR_SCREEN_GPS_TROUBLE) l(CUR_SCREEN_SAVE_SESSION) l(CUR_SCREEN_WIFI) l(CUR_SCREEN_OFF_SCREEN) l(CUR_SCREEN_SLEEP_SCREEN) l(CUR_SCREEN_LOW_BAT) l(CUR_SCREEN_SETTINGS) l(CUR_SCREEN_BOOT) l(CUR_SCREEN_FW_UPDATE) l(CUR_SCREEN_SD_TROUBLE)
-#define CFG_GROUP_LIST(l) l(CFG_GROUP_GPS, 0x00) l(CFG_GROUP_STAT_SCREENS, 0x01) l(CFG_GROUP_SCREEN, 0x02) l(CFG_GROUP_FW, 0x03)
+#define APP_MODE_LIST(l) \
+l(APP_MODE_UNKNOWN) \
+l(APP_MODE_BOOT) \
+l(APP_MODE_WIFI) \
+l(APP_MODE_GPS) \
+l(APP_MODE_SLEEP) \
+l(APP_MODE_SHUT_DOWN) \
+l(APP_MODE_RESTART)
+
+#define CUR_SCREEN_LIST(l) \
+l(CUR_SCREEN_NONE) \
+l(CUR_SCREEN_GPS_STATS) \
+l(CUR_SCREEN_GPS_SPEED) \
+l(CUR_SCREEN_GPS_INFO) \
+l(CUR_SCREEN_GPS_TROUBLE) \
+l(CUR_SCREEN_SAVE_SESSION) \
+l(CUR_SCREEN_WIFI) \
+l(CUR_SCREEN_OFF_SCREEN) \
+l(CUR_SCREEN_SLEEP_SCREEN) \
+l(CUR_SCREEN_LOW_BAT) \
+l(CUR_SCREEN_SETTINGS) \
+l(CUR_SCREEN_BOOT) \
+l(CUR_SCREEN_FW_UPDATE) \
+l(CUR_SCREEN_SD_TROUBLE)
+
+#define SCREEN_MODE_LIST(l) \
+    l(SCREEN_MODE_UNKNOWN, -1) \
+    l(SCREEN_MODE_BOOT, 0) \
+    l(SCREEN_MODE_SPEED_STATS_1, 1) \
+    l(SCREEN_MODE_SPEED_STATS_2, 2) \
+    l(SCREEN_MODE_SPEED_STATS_3, 3) \
+    l(SCREEN_MODE_SPEED_STATS_4, 4) \
+    l(SCREEN_MODE_SPEED_STATS_5, 5) \
+    l(SCREEN_MODE_SPEED_STATS_6, 6) \
+    l(SCREEN_MODE_SPEED_STATS_7, 7) \
+    l(SCREEN_MODE_SPEED_STATS_8, 8) \
+    l(SCREEN_MODE_SPEED_STATS_9, 9) \
+    l(SCREEN_MODE_GPS_TROUBLE, 10) \
+    l(SCREEN_MODE_GPS_INIT, 11) \
+    l(SCREEN_MODE_GPS_READY, 12) \
+    l(SCREEN_MODE_WIFI_START, 13) \
+    l(SCREEN_MODE_WIFI_AP, 14) \
+    l(SCREEN_MODE_WIFI_STATION, 15) \
+    l(SCREEN_MODE_PUSH, 16) \
+    l(SCREEN_MODE_SHUT_DOWN, 17) \
+    l(SCREEN_MODE_SLEEP, 18) \
+    l(SCREEN_MODE_RECORD, 19) \
+    l(SCREEN_MODE_SD_TROUBLE, 20) \
+    l(SCREEN_MODE_SETTINGS, 21) \
+    l(SCREEN_MODE_LOW_BAT, 22) \
+    l(SCREEN_MODE_OFF_SCREEN, 23) \
+    l(SCREEN_MODE_FW_UPDATE, 24) \
+    l(SCREEN_MODE_SPEED_1, 'a') \
+    l(SCREEN_MODE_SPEED_2, 'b')
+
+typedef enum {
+    SCREEN_MODE_LIST(ENUM_V)
+} screen_mode_t;
+
+#define IS_STAT_SCREEN(screen) (screen >= SCREEN_MODE_SPEED_STATS_1 && screen <= SCREEN_MODE_SPEED_STATS_9)
+
+#define CFG_GROUP_LIST(l) \
+l(CFG_GROUP_GPS, 0) \
+l(CFG_GROUP_STAT_SCREENS, 1) \
+l(CFG_GROUP_SCREEN, 2) \
+l(CFG_GROUP_FW, 3)
+
 typedef enum {
     APP_MODE_LIST(ENUM)
 } app_mode_t;
@@ -102,6 +170,19 @@ typedef struct v_settings_s {
 
 #define EPOCH_2022 1640995200UL /// start of the year 2022 1640995200
 
+enum record_done_e {
+    RECORD_DONE_START = 0,
+    RECORD_DONE_2 = 2,
+    RECORD_DONE_4 = 4,
+    RECORD_DONE_6 = 6,
+    RECORD_DONE_8 = 8,
+    RECORD_DONE_10 = 10,
+    RECORD_DONE_12 = 12,
+    RECORD_DONE_MARK = 25,
+    RECORD_DONE_OK = 240,
+    RECORD_DONE_END = 255
+};
+
 uint32_t screen_cb(void* arg);
 
 struct record_forwarder_s {
@@ -119,6 +200,9 @@ typedef struct main_ctx_s {
     struct context_s * ctx;
     struct m_wifi_context * wifi_ctx;
     struct logger_config_s * config;
+#ifdef CONFIG_DISPLAY_ENABLED
+    struct display_s display;
+#endif
     app_mode_t app_mode;
     cur_screens_t cur_screen;
     cur_screens_t next_screen;

@@ -19,7 +19,6 @@
 #endif
 #ifdef CONFIG_DISPLAY_ENABLED
 #include "driver_vendor.h"
-#include "display.h"
 #endif
 
 static const char *TAG = "hid_button";
@@ -155,7 +154,7 @@ static void button_timer_cb(void *arg) {
             }
         }
         refresh:
-#if defined(CONFIG_DISPLAY_ENABLED)
+#if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
         if(!m_app_ctx.screen_auto_refresh && display_task_is_paused()) {
             display_task_resume_for_times(flush_times, fast_refr_time, -1, false); // one partial refresh
         }
@@ -214,7 +213,7 @@ static void button_timer_cb(void *arg) {
             }
         }
 #endif
-#if defined(CONFIG_DISPLAY_ENABLED)
+#if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
         if(!m_app_ctx.screen_auto_refresh){
             display_task_resume_for_times(1, -1, -1, false);
         }
@@ -286,8 +285,8 @@ static void button_timer_cb(void *arg) {
                         // g_context_add_config(&m_context, m_context.config);
                     }
                 }
-#if defined(CONFIG_DISPLAY_ENABLED)
-                if(!m_app_ctx.screen_auto_refresh){
+#if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
+                if(!m_app_ctx.screen_auto_refresh && display_task_is_paused()) {
                     display_task_resume_for_times(1, -1, -1, false);
                 }
                 // lcd_ui_request_fast_refresh(0);
@@ -309,7 +308,7 @@ static void button_timer_cb(void *arg) {
 #endif
             }
 #else
-#if defined(CONFIG_DISPLAY_ENABLED)
+#if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
             if(!m_app_ctx.screen_auto_refresh){
                 display_task_resume_for_times(1, -1, 1, false);
             }
@@ -370,7 +369,7 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
         break;
     case L_BUTTON_LONG_PRESS_START:
         m_app_ctx.button_press_mode = 1;
-#if defined(CONFIG_DISPLAY_ENABLED)
+#if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
         if(!m_app_ctx.screen_auto_refresh){
             display_task_resume_for_times(1, -1, -1, false);
         }
@@ -387,7 +386,7 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
         }
         else{
             m_app_ctx.button_press_mode = 2;
-#if defined(CONFIG_DISPLAY_ENABLED)
+#if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
             if(!m_app_ctx.screen_auto_refresh){
                 display_task_resume_for_times(1, -1, -1, false);
             }

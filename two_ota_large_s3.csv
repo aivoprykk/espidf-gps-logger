@@ -5,11 +5,11 @@ nvs_keys, data, nvs_keys,,         0x1000
 otadata,  data, ota,     ,         0x2000
 phy_init, data, phy,     ,         0x1000
 emul_efuse,data,efuse,   ,         0x2000
-# 2000K for the factory/ota_0/ota_1 app
-factory,  app,  factory, ,         0x1f4000
-ota_0,    app,  ota_0,   ,         0x1f4000
-ota_1,    app,  ota_1,   ,         0x1f4000
-## 10000K for fatstore, max out 16M flash storage
-fatstore, data, fat,     ,         0x9c4000
+# 5400K for the factory/ota_0/ota_1 app
+factory,  app,  factory, ,         1800K
+ota_0,    app,  ota_0,   ,         1800K
+ota_1,    app,  ota_1,   ,         1800K
+## 10700K for fatstore, max out 16M flash storage
+fatstore, data, fat,     ,         10700K
 ## optional, 2000K for spiffs - if used, fatstore size should be reduced
-# spiffs,   data, spiffs,  ,         0x1f40000
+# spiffs,   data, spiffs,  ,         2000K
