@@ -43,11 +43,13 @@ static void button_timer_cb(void *arg) {
     ubx_config_t *ubx_dev = m_context.gps.ubx_device;
     const ubx_hw_t hw_type = ubx_dev->rtc_conf->hw_type;
 #endif
+#if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
+    uint8_t flush_times = 1;
+#endif
     if(button_clicks == 1) {
 #if (C_LOG_LEVEL < 2)
         ILOG(TAG, "[%s] Button single click arrived, %s.", __func__, m_app_ctx.button_press_mode == 3 ? "lllong" : m_app_ctx.button_press_mode == 2 ? "llong" : m_app_ctx.button_press_mode == 1 ? "long" : "short");
 #endif
-        uint8_t flush_times = 1;
         int8_t fast_refr_time = -1;
         if(m_app_ctx.button_press_mode==3) { // long long long press
             if(m_app_ctx.next_screen == CUR_SCREEN_SETTINGS||m_app_ctx.next_screen == CUR_SCREEN_FW_UPDATE) m_app_ctx.next_screen = CUR_SCREEN_NONE;
@@ -95,6 +97,9 @@ static void button_timer_cb(void *arg) {
                 m_context.request_shutdown = true;
                 goto done; // not requesting refresh here
             }
+// #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
+//             flush_times = 2;
+// #endif
         }
         else if (m_app_ctx.button_press_mode==0) { // just click
             if (m_app_ctx.cur_screen == CUR_SCREEN_FW_UPDATE){
@@ -193,24 +198,34 @@ static void button_timer_cb(void *arg) {
 #if defined (CONFIG_LOGGER_WIFI_ENABLED)
         else if(m_app_ctx.app_mode == APP_MODE_WIFI) {
             wifi_sta_conf_sync();
-            if(wifi_context.s_ap_connection && wifi_context.s_sta_connection) {
-#if (C_LOG_LEVEL < 2)
-                ILOG(TAG, "[%s] wifi ap mode requested", __func__);
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+            if(wifi_context.s_wifi_mode == wifi_mode_apsta) {
+#else
+            if(wifi_context.s_wifi_mode == wifi_mode_ap) {
 #endif
-                wifi_mode(0, 1); // wifi set station mode
-            }
-            else if(wifi_context.s_ap_connection && !wifi_context.s_sta_connection) {
 #if (C_LOG_LEVEL < 2)
                 ILOG(TAG, "[%s] wifi sta mode requested", __func__);
 #endif
                 wifi_mode(1, 0); // wifi set station mode
             }
+            else 
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+            if(wifi_context.s_wifi_mode == wifi_mode_sta)
+#endif
+            {
+#if (C_LOG_LEVEL < 2)
+                ILOG(TAG, "[%s] wifi ap mode requested", __func__);
+#endif
+                wifi_mode(0, 1); // wifi set station mode
+            }
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
             else {
 #if (C_LOG_LEVEL < 2)
                 ILOG(TAG, "[%s] wifi sta + ap mode requested", __func__);
 #endif
                 wifi_mode(1, 1); // wifi set ap mode
             }
+#endif
         }
 #endif
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
@@ -242,7 +257,7 @@ static void button_timer_cb(void *arg) {
                 ILOG(TAG, "[%s] settings screen change requested", __func__);
 #endif
                 if(m_app_ctx.cfg_screen == CFG_GROUP_GPS) {
-                    if(set_gps_cfg_item(m_app_ctx.gps_cfg_item)) {
+                    if(set_gps_cfg_item(m_app_ctx.gps_cfg_item, 0)) {
 #if (C_LOG_LEVEL < 2)
                         ILOG(TAG, "[%s] settings screen gps change saved", __func__);
 #endif
