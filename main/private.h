@@ -34,11 +34,6 @@ enum speeds_e {
 #else
     BAR_MAX = 240,
 #endif
-    QUATER_SEC_IN_MS = 250,
-    HALF_SEC_IN_MS = 500,
-    ONE_K = 1000,
-    HALF_H_IN_SECS = 1800,
-    ONE_H_IN_SECS = 3600
 };
 
 #define MINIMUM_VOLTAGE 3.25

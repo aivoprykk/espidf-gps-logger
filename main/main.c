@@ -458,7 +458,11 @@ void app_mode_wifi_handler(int verbose) {
 #endif
         wifi_sta_conf_sync();
         wifi_init();
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
         wifi_mode(1, 1);
+#else
+        wifi_mode(0, 1);
+#endif
 #if (C_LOG_LEVEL < 2)
         ILOG(TAG, "[%s] wifi started.", __FUNCTION__);
 #endif
@@ -544,7 +548,7 @@ static void gps_save_rtc() {
     m_context_rtc.RTC_1h = avail_fields[fld_s3600_display_max].value.num();
     m_context_rtc.RTC_mile = avail_fields[fld_m1852_display_max].value.num(); // null...
     m_context_rtc.RTC_max_2s = avail_fields[fld_s2_display_max].value.num();
-    m_context_rtc.RTC_avg_10s = avail_fields[fld_s10_display_max].value.num();
+    m_context_rtc.RTC_avg_10s = avail_fields[fld_s10_display_avg].value.num();
     m_context_rtc.RTC_R1_10s = avail_fields[fld_s10_r1_display].value.num();
     m_context_rtc.RTC_R2_10s = avail_fields[fld_s10_r2_display].value.num();
     m_context_rtc.RTC_R3_10s = avail_fields[fld_s10_r3_display].value.num();
@@ -566,30 +570,43 @@ static void vfs_event_handler(void *handler_args, esp_event_base_t base, int32_t
         switch(id) {
             case VFS_EVENT_SDCARD_MOUNTED:
                 ILOG(TAG, "[%s] %s", __FUNCTION__, vfs_event_strings[id]);
-                m_context.sdOK = true;
+                // m_context.sdOK = true;
                 //m_context.freeSpace = sdcard_space();
                 break;
             case VFS_EVENT_SDCARD_MOUNT_FAILED:
                 ILOG(TAG, "[%s] %s", __FUNCTION__, vfs_event_strings[id]);
-                // m_context.sdOK = false;
-#if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
-                if(no_auto_refresh && display_task_is_paused()){
-                    display_task_resume_for_times(1, -1, -1, false);
-                }
-#endif
                 break;
             case VFS_EVENT_SDCARD_UNMOUNTED:
                 ILOG(TAG, "[%s] %s", __FUNCTION__, vfs_event_strings[id]);
-                m_context.sdOK = false;
+                // m_context.sdOK = false; 
                 break;
             case VFS_EVENT_FAT_PARTITION_MOUNTED:
                 ILOG(TAG, "[%s] %s", __FUNCTION__, vfs_event_strings[id]);
-                m_context.sdOK = true;
+                // m_context.sdOK = true;
                 break;
             case VFS_EVENT_FAT_PARTITION_MOUNT_FAILED:
                 ILOG(TAG, "[%s] %s", __FUNCTION__, vfs_event_strings[id]);
                 break;
             case VFS_EVENT_FAT_PARTITION_UNMOUNTED:
+                break;
+            case VFS_EVENT_LOG_PARTITION_CHANGED:
+                ILOG(TAG, "[%s] %s", __FUNCTION__, vfs_event_strings[id]);
+                if(log_files_opened(&m_context.gps)) {
+                    close_files(&m_context.gps);
+                    log_config_init();
+                    open_files(&m_context.gps);
+                }
+                if(vfs_ctx.gps_log_part != VFS_PART_MAX) {
+                    m_context.sdOK = true;
+                }
+                else {
+                    m_context.sdOK = false;
+                }
+#if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
+                if(no_auto_refresh && display_task_is_paused()){
+                    display_task_resume_for_times(1, -1, -1, false);
+                }
+#endif
                 break;
             default:
                 // ILOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
@@ -622,7 +639,7 @@ static void ota_event_handler(void *handler_args, esp_event_base_t base, int32_t
                 refresh:
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
                 if(no_auto_refresh && display_task_is_paused()){
-                    display_task_resume_for_times(1, -1, -1, false);
+                    display_task_resume_for_times(2, -1, -1, false);
                 }
 #endif
                 break;
@@ -1189,10 +1206,15 @@ static void setup(void) {
 // static char rtbuf[BUFSIZ];
 void app_main(void) {
     ILOG(TAG, "[%s]", __FUNCTION__);
-    uint32_t loops = 0, millis = 0;
+    uint8_t verbose = 0;
+    uint32_t loops = 0;
+#if defined(CONFIG_DISPLAY_ENABLED)
+#if defined(CONFIG_LCD_IS_EPD)
+    uint32_t millis = get_millis();
+#endif
+#endif
     // rtc_wdt_protect_off();
     setup();
-    uint8_t verbose = 0;
     while (1) {
         if(loops%10==0) { // ~1sec
             update_bat();
@@ -1214,7 +1236,7 @@ void app_main(void) {
             m_context.request_shutdown = 0;
             m_context.request_restart = 0;
         }
-        if(!m_app_ctx.config && m_context.sdOK) {
+        if(!m_app_ctx.config_initialized && vfs_ctx.config_part != VFS_PART_MAX) {
 #if (C_LOG_LEVEL < 2)
             ILOG(TAG, "[%s] config not loaded, do it as sdcard is initialized.", __FUNCTION__);
 #endif
@@ -1244,7 +1266,7 @@ void app_main(void) {
 #if (C_LOG_LEVEL < 2)
                 DLOG(TAG, "[%s] pause task when first_flush_done: %hhu count: %lu\n", __func__, m_app_ctx.display.first_flush_done, display_get_flush_count());
 #endif
-                if(display_get_flush_count() >= 3) {
+                if(display_get_flush_count() >= 3 || (get_millis() - millis) > SEC_TO_MS(12)) {
                     display_task_pause();
                     // display_task_resume_for_times(2, -1, -1, false);
                     m_app_ctx.display.first_flush_done = 2;
@@ -1253,7 +1275,7 @@ void app_main(void) {
         }
 #endif
 #endif
-        delay_ms(50);
+        delay_ms(MS_50);
     }
 #if defined(CONFIG_LOGGER_USE_WDT)
     run_wdt_loop = false;
