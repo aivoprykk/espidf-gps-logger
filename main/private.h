@@ -84,38 +84,45 @@ l(CUR_SCREEN_BOOT) \
 l(CUR_SCREEN_FW_UPDATE) \
 l(CUR_SCREEN_SD_TROUBLE)
 
+#if defined(CONFIG_LOGGER_SPEED_SCREEN_VARIANT)
+#define LL3(l) l(SCREEN_MODE_SPEED_2)
+#else
+#define LL3(l) 
+#endif
 #define SCREEN_MODE_LIST(l) \
-    l(SCREEN_MODE_UNKNOWN, -1) \
-    l(SCREEN_MODE_BOOT, 0) \
-    l(SCREEN_MODE_SPEED_STATS_1, 1) \
-    l(SCREEN_MODE_SPEED_STATS_2, 2) \
-    l(SCREEN_MODE_SPEED_STATS_3, 3) \
-    l(SCREEN_MODE_SPEED_STATS_4, 4) \
-    l(SCREEN_MODE_SPEED_STATS_5, 5) \
-    l(SCREEN_MODE_SPEED_STATS_6, 6) \
-    l(SCREEN_MODE_SPEED_STATS_7, 7) \
-    l(SCREEN_MODE_SPEED_STATS_8, 8) \
-    l(SCREEN_MODE_SPEED_STATS_9, 9) \
-    l(SCREEN_MODE_GPS_TROUBLE, 10) \
-    l(SCREEN_MODE_GPS_INIT, 11) \
-    l(SCREEN_MODE_GPS_READY, 12) \
-    l(SCREEN_MODE_WIFI_START, 13) \
-    l(SCREEN_MODE_WIFI_AP, 14) \
-    l(SCREEN_MODE_WIFI_STATION, 15) \
-    l(SCREEN_MODE_PUSH, 16) \
-    l(SCREEN_MODE_SHUT_DOWN, 17) \
-    l(SCREEN_MODE_SLEEP, 18) \
-    l(SCREEN_MODE_RECORD, 19) \
-    l(SCREEN_MODE_SD_TROUBLE, 20) \
-    l(SCREEN_MODE_SETTINGS, 21) \
-    l(SCREEN_MODE_LOW_BAT, 22) \
-    l(SCREEN_MODE_OFF_SCREEN, 23) \
-    l(SCREEN_MODE_FW_UPDATE, 24) \
-    l(SCREEN_MODE_SPEED_1, 'a') \
-    l(SCREEN_MODE_SPEED_2, 'b')
+    l(SCREEN_MODE_UNKNOWN) \
+    l(SCREEN_MODE_BOOT) \
+    l(SCREEN_MODE_SPEED_STATS_1) \
+    l(SCREEN_MODE_SPEED_STATS_2) \
+    l(SCREEN_MODE_SPEED_STATS_3) \
+    l(SCREEN_MODE_SPEED_STATS_4) \
+    l(SCREEN_MODE_SPEED_STATS_5) \
+    l(SCREEN_MODE_SPEED_STATS_6) \
+    l(SCREEN_MODE_SPEED_STATS_7) \
+    l(SCREEN_MODE_SPEED_STATS_8) \
+    l(SCREEN_MODE_SPEED_STATS_9) \
+    l(SCREEN_MODE_SPEED_STATS_10) \
+    l(SCREEN_MODE_GPS_TROUBLE) \
+    l(SCREEN_MODE_GPS_INIT) \
+    l(SCREEN_MODE_GPS_READY) \
+    l(SCREEN_MODE_WIFI_START) \
+    l(SCREEN_MODE_WIFI_AP) \
+    l(SCREEN_MODE_WIFI_STATION) \
+    l(SCREEN_MODE_PUSH) \
+    l(SCREEN_MODE_SHUT_DOWN) \
+    l(SCREEN_MODE_SLEEP) \
+    l(SCREEN_MODE_RECORD) \
+    l(SCREEN_MODE_SD_TROUBLE) \
+    l(SCREEN_MODE_SETTINGS) \
+    l(SCREEN_MODE_LOW_BAT) \
+    l(SCREEN_MODE_CHARGING) \
+    l(SCREEN_MODE_OFF_SCREEN) \
+    l(SCREEN_MODE_FW_UPDATE) \
+    l(SCREEN_MODE_SPEED_1) \
+    LL3(l) \
 
 typedef enum {
-    SCREEN_MODE_LIST(ENUM_V)
+    SCREEN_MODE_LIST(ENUM)
 } screen_mode_t;
 
 #define IS_STAT_SCREEN(screen) (screen >= SCREEN_MODE_SPEED_STATS_1 && screen <= SCREEN_MODE_SPEED_STATS_9)
@@ -201,7 +208,6 @@ typedef struct main_ctx_s {
     app_mode_t app_mode;
     cur_screens_t cur_screen;
     cur_screens_t next_screen;
-    uint8_t stat_screen_count;
     uint8_t fw_update_screen;
     uint8_t cfg_screen;
     uint8_t button_press_mode;

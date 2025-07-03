@@ -54,6 +54,7 @@
 #endif
 #ifdef CONFIG_UBLOX_ENABLED
 #include "ubx.h"
+#include "ubx_msg.h"
 #include "ubx_events.h"
 #endif
 #ifdef CONFIG_LOGGER_WIFI_ENABLED
@@ -100,7 +101,6 @@ struct main_ctx_s m_app_ctx = {
 .app_mode = APP_MODE_UNKNOWN,
 .cur_screen = CUR_SCREEN_NONE,
 .next_screen = CUR_SCREEN_NONE,
-.stat_screen_count = 0,
 .low_bat_countdown = 0,
 .record_done = 25,
 .button_down = false,
@@ -418,7 +418,7 @@ static void init_watchdog() {
 #if !CONFIG_ESP_TASK_WDT_INIT
    esp_task_wdt_config_t twdt_config = {
             .timeout_ms = SEC_TO_MS(WDT_TIMEOUT),
-            .idle_core_mask = (1U << portNUM_PROCESSORS) - 1,  // Bitmask of all cores
+            .idle_core_mask = BIT(portNUM_PROCESSORS) - 1,  // Bitmask of all cores
             .trigger_panic = false,
    };
     esp_task_wdt_init(&twdt_config);
@@ -458,7 +458,7 @@ void app_mode_wifi_handler(int verbose) {
 #endif
         wifi_sta_conf_sync();
         wifi_init();
-#if defined(CONFIG_IDF_TARGET_ESP32S3)
+#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(ENABLE_WIFI_AP_STA)
         wifi_mode(1, 1);
 #else
         wifi_mode(0, 1);
@@ -555,7 +555,7 @@ static void gps_save_rtc() {
     m_context_rtc.RTC_R4_10s = avail_fields[fld_s10_r4_display].value.num();
     m_context_rtc.RTC_R5_10s = avail_fields[fld_s10_r5_display].value.num();
     
-    getLocalTime(&m_context_rtc.rtc_tm, 0);
+    get_local_time(&m_context_rtc.rtc_tm);
     // m_context_rtc.RTC_year = ((tms.tm_year) + 1900);
     // m_context_rtc.RTC_month = ((tms.tm_mon) + 1);
     // m_context_rtc.RTC_day = (tms.tm_mday);
@@ -721,29 +721,20 @@ static void ubx_event_handler(void *handler_args, esp_event_base_t base, int32_t
     if(base == UBX_EVENT) {
         switch(id) {
             case UBX_EVENT_DATETIME_SET:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] u %s", __FUNCTION__, ubx_event_strings(id));
-#endif
                 goto refresh;
                 break;
             case UBX_EVENT_UART_INIT_DONE:
             case UBX_EVENT_UART_INIT_FAIL:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] u %s", __FUNCTION__, ubx_event_strings(id));
-#endif
                 goto refresh;
                 break;
             case UBX_EVENT_UART_DEINIT_DONE:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] u %s", __FUNCTION__, ubx_event_strings(id));
-#endif
                 break;
             case UBX_EVENT_SETUP_DONE:
             case UBX_EVENT_SETUP_FAIL:
+                refresh:
 #if (C_LOG_LEVEL < 3)
                 ILOG(TAG, "[%s] u %s", __FUNCTION__, ubx_event_strings(id));
 #endif
-                refresh:
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
                 if(no_auto_refresh && display_task_is_paused()){
                     display_task_resume_for_times(1, -1, -1, false);
@@ -874,6 +865,12 @@ static void gps_log_event_handler(void *handler_args, esp_event_base_t base, int
 #if (C_LOG_LEVEL < 3)
                 ILOG(TAG, "[%s] g %s d %hhu", __FUNCTION__, gps_log_event_strings(id), *((uint8_t*)event_data));
 #endif
+                struct gps_user_cfg_evt_data_s * evt_data = event_data;
+                if(evt_data->pos == gps_cfg_timezone) {
+                    struct tm tm;
+                    get_local_time(&tm);
+                    c_set_time(&tm, 0, c_gps_cfg.timezone - evt_data->value);
+                }
                 config_save_json(m_app_ctx.config);
                 break;
             default:
@@ -927,9 +924,6 @@ static void wifi_event_handler(void *handler_args, esp_event_base_t base, int32_
         switch(id) {
             case WIFI_EVENT_AP_START:
             case WIFI_EVENT_AP_STOP:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] w %s", __FUNCTION__, wifi_event_strings(id));
-#endif
                 goto refresh;
                 break;
             default:
@@ -940,10 +934,10 @@ static void wifi_event_handler(void *handler_args, esp_event_base_t base, int32_
         switch(id) {
             case IP_EVENT_STA_GOT_IP:
             case IP_EVENT_STA_LOST_IP:
+                refresh:
 #if (C_LOG_LEVEL < 3)
                 ILOG(TAG, "[%s] w %s", __FUNCTION__, wifi_event_strings(id));
 #endif
-                refresh:
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
                 if(no_auto_refresh && display_task_is_paused()){
                     display_task_resume_for_times(1, -1, -1, false);
@@ -1116,9 +1110,13 @@ static void ctx_load_cb() {
 #endif
     g_context_add_config(&m_context, m_app_ctx.config);
     config_fix_values(m_app_ctx.config);
+    gps_config_fix_values();
     // g_context_ubx_add_config(&m_context, 0);
     // log_config_add_config(m_context.gps.log_config, m_app_ctx.config);
     m_app_ctx.config_initialized = 1;
+    setenv("TZ", "UTC", 0);
+    tzset();
+    // c_set_time(&m_context_rtc.rtc_tm, 0, 0);
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
     if(!m_app_ctx.screen_auto_refresh && display_task_is_paused()){
        display_task_resume_for_times(1, -1, -1, false);
@@ -1242,20 +1240,31 @@ void app_main(void) {
 #endif
             ctx_load_cb();
         }
-        if (loops++ >= 49) {
+#if (C_LOG_LEVEL < 4)
 #if (C_LOG_LEVEL < 3)
-// #if (C_LOG_LEVEL < 2)
+        if (loops++ >= 49) {
+            mem_info();
             tasks_memory_info();
             task_top();
-// #else
-//             task_memory_info(__func__);
-// #endif
+            print_lv_mem_mon();
+            if(m_app_ctx.app_mode == APP_MODE_GPS && m_context.gps.ubx_device) {
+                struct ubx_msg_s *ubxMessage = &m_context.gps.ubx_device->ubx_msg;
+                if(ubxMessage->navPvt.valid) {
+                    WLOG(TAG, "sAcc: %lu mm/s, numSv: %hhu, hDop: %.02f", ubxMessage->navPvt.sAcc, ubxMessage->navPvt.numSV, ubxMessage->navDOP.hDOP/1000.0f);
+                } else {
+                    WLOG(TAG, "sAcc: %lu mm/s, numSv: 0, hDop: %.02f", ubxMessage->navPvt.sAcc, ubxMessage->navDOP.hDOP/1000.0f);
+                }
+            }
+#else
+        if (loops++ >= 99) {
+            mem_info();
+            print_lv_mem_mon();
 #endif
             loops=0;
             verbose = 1;
-        } else {
+        } else
             verbose = 0;
-        }
+#endif
 #if defined(CONFIG_DISPLAY_ENABLED)
 #if defined(CONFIG_LCD_IS_EPD)
         if(m_app_ctx.screen_auto_refresh || m_app_ctx.display.first_flush_done) {

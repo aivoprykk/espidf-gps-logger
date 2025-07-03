@@ -126,7 +126,7 @@ static void button_timer_cb(void *arg) {
 #endif
                 }
                 else if(m_app_ctx.cfg_screen == CFG_GROUP_STAT_SCREENS) {
-                    if(++m_app_ctx.stat_screen_cfg_item >= config_stat_screen_item_count)
+                    if(++m_app_ctx.stat_screen_cfg_item >= gps_stat_screen_item_count)
                         m_app_ctx.stat_screen_cfg_item = 0;
                 }
                 else if(m_app_ctx.cfg_screen == CFG_GROUP_SCREEN) {
@@ -150,11 +150,11 @@ static void button_timer_cb(void *arg) {
                     m_context.Field_choice = 1;
                 }
                 else if(m_app_ctx.cur_screen==CUR_SCREEN_GPS_STATS) {
-                    if(++m_context.stat_screen_cur >= get_stat_screens_count()) m_context.stat_screen_cur = 0;
+                    if(++m_context.stat_screen_cur >= gps_stat_screen_item_count) m_context.stat_screen_cur = 0;
 #if (C_LOG_LEVEL < 2)
                     ILOG(TAG, "[%s] next screen requested, cur: %hhu", __func__, m_context.stat_screen_cur);
 #endif
-                    m_app_ctx.stat_screen_count = get_stat_screens_count();
+                    // m_app_ctx.stat_screen_count = gps_stat_screen_item_count;
                 }
             }
         }
@@ -198,7 +198,7 @@ static void button_timer_cb(void *arg) {
 #if defined (CONFIG_LOGGER_WIFI_ENABLED)
         else if(m_app_ctx.app_mode == APP_MODE_WIFI) {
             wifi_sta_conf_sync();
-#if defined(CONFIG_IDF_TARGET_ESP32S3)
+#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(ENABLE_WIFI_AP_STA)
             if(wifi_context.s_wifi_mode == wifi_mode_apsta) {
 #else
             if(wifi_context.s_wifi_mode == wifi_mode_ap) {
@@ -209,7 +209,7 @@ static void button_timer_cb(void *arg) {
                 wifi_mode(1, 0); // wifi set station mode
             }
             else 
-#if defined(CONFIG_IDF_TARGET_ESP32S3)
+#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(ENABLE_WIFI_AP_STA)
             if(wifi_context.s_wifi_mode == wifi_mode_sta)
 #endif
             {
@@ -218,7 +218,7 @@ static void button_timer_cb(void *arg) {
 #endif
                 wifi_mode(0, 1); // wifi set station mode
             }
-#if defined(CONFIG_IDF_TARGET_ESP32S3)
+#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(ENABLE_WIFI_AP_STA)
             else {
 #if (C_LOG_LEVEL < 2)
                 ILOG(TAG, "[%s] wifi sta + ap mode requested", __func__);
@@ -267,11 +267,11 @@ static void button_timer_cb(void *arg) {
                     }
                 }
                 else if(m_app_ctx.cfg_screen == CFG_GROUP_STAT_SCREENS) {
-                    if(set_stat_screen_cfg_item(m_app_ctx.config, m_app_ctx.stat_screen_cfg_item)) {
+                    if(set_stat_screen_cfg_item(m_app_ctx.stat_screen_cfg_item)) {
 #if (C_LOG_LEVEL < 2)
                         ILOG(TAG, "[%s] settings screen change requested", __func__);
 #endif
-                        g_context_add_config(&m_context, m_context.config);
+                        // g_context_add_config(&m_context, m_context.config);
                     }
                 }
                 else if(m_app_ctx.cfg_screen == CFG_GROUP_SCREEN) {
@@ -356,9 +356,9 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
             const struct ubx_config_s *ubx_dev = gps->ubx_device;
             if(tm >= CONFIG_LOGGER_BUTTON_LONG_PRESS_TIME_MS) {
                 if (ubx_dev->ready && gps->signal_ok) {
-                    reset_time_stats(&gps->s10);
-                    reset_time_stats(&gps->s2);
-                    reset_alfa_stats(&gps->a500);
+                    reset_speed_by_time_stats(&gps->s10);
+                    reset_speed_by_time_stats(&gps->s2);
+                    reset_speed_alfa_stats(&gps->a500);
                 }
             } else {
                 /* if (ubx_dev->ready && ubx_dev->signal_ok) {
