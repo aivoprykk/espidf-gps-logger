@@ -3,16 +3,11 @@
 #include "private.h"
 
 #include "lcd.h"
-#include "ui_common.h"
 #include "vfs.h"
 
 #if defined(CONFIG_DISPLAY_ENABLED)
 
 #include <string.h>
-
-#if defined(CONFIG_LOGGER_ADC_ENABLED)
-#include <adc.h>
-#endif
 
 #include "driver_vendor.h"
 
@@ -189,9 +184,7 @@ size_t append_dots(char * p, uint8_t max_dots, uint8_t * cur_dots) {
 // static void statusbar_update();
 
 static uint32_t _sleep_screen(const struct display_s *me, int choice) {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __func__);
-#endif
+    FUNC_ENTRY(TAG);
     char tmp[24], *p = tmp;
     lv_label_t *panel;
     // if (_lvgl_lock(50)) {
@@ -239,11 +232,38 @@ static uint32_t _sleep_screen(const struct display_s *me, int choice) {
     return 100;
 }
 
-static size_t bat_to_char(char *str, uint8_t full) {
-    char *p = str + uint_to_char(full, str);
-    *p++ = '%';
+static const char * bat_to_char(char *str, uint8_t mode) {
+    float bat;
+#if defined(CONFIG_LOGGER_ADC_ENABLED)
+    get_battery_voltage_for_display(0, m_context_rtc.RTC_voltage_bat, &bat);
+#else
+    bat = m_context_rtc.RTC_voltage_bat;
+#endif
+    const uint8_t state_perc = bat > 4.5 ? 110
+                : bat >= 4.2 ? 101
+#if defined(CONFIG_LOGGER_ADC_ENABLED)
+                : calc_bat_perc_v(bat);
+#else
+                : 51;
+#endif
+    const char * s = adc_on_ac() ? LV_SYMBOL_CHARGE
+            : state_perc < 10  ? LV_SYMBOL_BATTERY_EMPTY
+            : state_perc < 20  ? LV_SYMBOL_BATTERY_1
+            : state_perc < 60  ? LV_SYMBOL_BATTERY_2
+            : state_perc < 101 ? LV_SYMBOL_BATTERY_FULL
+            : state_perc < 110 ? LV_SYMBOL_CHARGE
+                        : LV_SYMBOL_USB;
+    char *p = str;
+    if(mode == bat_perc) {
+        if(state_perc < 100) *p++ = ' ';
+        p = str + uint_to_char((state_perc > 100 ? 100 : state_perc), str);
+        *p++ = '%';
+    } else if(mode == bat_volt) {
+        p += f2_to_char(bat, p);
+        *p++ = 'V';
+    }
     *p = 0;
-    return p - str;
+    return s;
 }
 
 static size_t temp_to_char(char *str) {
@@ -547,16 +567,16 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->screen.spee
     }
     else if (field == cfg_fld_spd_1_hour) { // 60 minutes stats
         if(has_moved) {
-        s[0] = avail_fields[fld_s3600_cur_run_max].value.num();
-        s[1] = avail_fields[fld_s3600_display_max].value.num(); // 1h max speed
-        if (NUM_LT_3_DIG(s[0])) 
-            f2_to_char(s[0], val[0]);
-        else
-            f1_to_char(s[0], val[0]);
-        if (NUM_LT_3_DIG(s[1]))
-            f2_to_char(s[1], val[1]);
-        else
-            f1_to_char(s[1], val[1]);
+            s[0] = avail_fields[fld_s3600_cur_run_max].value.num();
+            s[1] = avail_fields[fld_s3600_display_max].value.num(); // 1h max speed
+            if (NUM_LT_3_DIG(s[0])) 
+                f2_to_char(s[0], val[0]);
+            else
+                f1_to_char(s[0], val[0]);
+            if (NUM_LT_3_DIG(s[1]))
+                f2_to_char(s[1], val[1]);
+            else
+                f1_to_char(s[1], val[1]);
         }
         setvar:
         var[0] = scr_fld[0][field][0];
@@ -590,28 +610,28 @@ static esp_err_t speed_info_bar_update() {  // info bar when config->screen.spee
         // }
     }
     if (has_moved && (panel = ui_speed_screen.bar)) {
-      uint32_t run_rectangle_length = 0;
+        uint32_t run_rectangle_length = 0;
 #if defined(CONFIG_GPS_LOG_ENABLED)
-      uint32_t millis = get_millis();
-      uint32_t log_seconds = display_state.start_logging_millis ? MS_TO_SEC(millis - display_state.start_logging_millis) : 0;  // number of seconds since logging started
-      if (field == cfg_fld_spd_half_hour) {
-          run_rectangle_length = log_seconds * bar_max / (HALF_H_IN_SECS);
-          if (log_seconds > (HALF_H_IN_SECS)) {
-              display_state.start_logging_millis = millis;
-          }
-      }  // 30 minutes = full bar
-      else if (field == cfg_fld_spd_1_hour) {
-          run_rectangle_length = log_seconds * bar_max / ONE_H_IN_SECS;
-          if (log_seconds > ONE_H_IN_SECS) {
-              display_state.start_logging_millis = millis;
-          }
-      }  // 60 minutes = full bar
-      else if (field == cfg_fld_spd_alpha && gps_data->run_distance_after_turn <= bar_length) {
-          run_rectangle_length = gps_data->run_distance_after_turn / bar_length;
-      }
-      else {
-          run_rectangle_length = gps_data->run_distance / bar_length;
-      }
+        uint32_t millis = get_millis();
+        uint32_t log_seconds = display_state.start_logging_millis ? MS_TO_SEC(millis - display_state.start_logging_millis) : 0;  // number of seconds since logging started
+        if (field == cfg_fld_spd_half_hour) {
+            run_rectangle_length = log_seconds * bar_max / (HALF_H_IN_SECS);
+            if (log_seconds > (HALF_H_IN_SECS)) {
+                display_state.start_logging_millis = millis;
+            }
+        }  // 30 minutes = full bar
+        else if (field == cfg_fld_spd_1_hour) {
+            run_rectangle_length = log_seconds * bar_max / ONE_H_IN_SECS;
+            if (log_seconds > ONE_H_IN_SECS) {
+                display_state.start_logging_millis = millis;
+            }
+        }  // 60 minutes = full bar
+        else if (field == cfg_fld_spd_alpha && gps_data->run_distance_after_turn <= bar_length) {
+            run_rectangle_length = gps_data->run_distance_after_turn / bar_length;
+        }
+        else {
+            run_rectangle_length = gps_data->run_distance / bar_length;
+        }
 #endif
         lv_bar_set_value(panel, run_rectangle_length, 0);
     }
@@ -650,9 +670,7 @@ static void speed_info_bar_update_low_speed_seconds(void) {
  * @param timer Pointer to the timer triggering this callback.
  */
 static void speed_cb(lv_timer_t *timer) {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __func__);
-#endif
+    FUNC_ENTRY(TAG);
     const struct gps_context_s *gps = &m_app_ctx.ctx->gps;
     const struct ubx_config_s *ubx_dev = gps->ubx_device;
     char str[8] = {0}, *p = str;
@@ -672,7 +690,7 @@ static void speed_cb(lv_timer_t *timer) {
       }
       else 
       {
-          gpsspd = gps_last_speed_smoothed(2) * c_gps_cfg.speed_calibration;
+          gpsspd = convert_speed((float)gps_last_speed_smoothed(2), c_gps_cfg.speed_unit);
           len = (NUM_GE_3_DIG(gpsspd)) ? f1_to_char(gpsspd, p) : f2_to_char(gpsspd, p);
       }
 #else
@@ -691,9 +709,7 @@ static void speed_cb(lv_timer_t *timer) {
  * @param timer Pointer to the timer triggering this callback.
  */
 static void gps_info_cb(lv_timer_t *timer) {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __func__);
-#endif
+    FUNC_ENTRY(TAG);
     char str[64] = {0}, *p = str;
     const struct gps_context_s *gps = &m_app_ctx.ctx->gps;
     const struct ubx_config_s *ubx_dev = gps->ubx_device;
@@ -738,9 +754,7 @@ static void gps_info_cb(lv_timer_t *timer) {
  * @param timer Pointer to the timer triggering this callback.
  */
 static void wifi_info_cb(lv_timer_t *timer) {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __func__);
-#endif
+    FUNC_ENTRY(TAG);
 #if defined(CONFIG_LOGGER_WIFI_ENABLED)
     char str[64] = {0}, *p = str;
     size_t len = 0;
@@ -839,9 +853,7 @@ static void wifi_info_cb(lv_timer_t *timer) {
  * @param timer Pointer to the timer triggering this callback.
  */
 static void statusbar_time_cb(lv_timer_t *timer) {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __func__);
-#endif
+    FUNC_ENTRY(TAG);
 #if defined(STATUS_PANEL_V1)
     ui_status_panel_t * statusbar = &ui_status_panel;
     if(!statusbar->parent) {
@@ -852,7 +864,11 @@ static void statusbar_time_cb(lv_timer_t *timer) {
 #endif
     const struct main_ctx_s *ctx = 0;
     if (timer) {
+#if (LVGL_VERSION_MAJOR < 9)
         ctx = timer->user_data;
+#else        
+        ctx = (const struct main_ctx_s *)lv_timer_get_user_data(timer);
+#endif
         if (ctx->app_mode == APP_MODE_WIFI && !m_app_ctx.ctx->firmware_update_started) {
             wifi_info_cb(timer);
         }
@@ -879,7 +895,7 @@ static void statusbar_time_cb(lv_timer_t *timer) {
             }
         }
 #if (C_LOG_LEVEL < 2)
-            DLOG(TAG, "** [%s] (date)time: %s {d: %d, m:%d, y:%d} ** \n", __func__, tmp, tm.tm_mday, tm.tm_mon, tm.tm_year);
+            DLOG(TAG, "** [%s] (date)time: %s {d: %d, m:%d, y:%d} ** ", __func__, tmp, tm.tm_mday, tm.tm_mon, tm.tm_year);
 #endif
         set_label_text_safe(panel, &tmp[0], 0);
     }
@@ -942,32 +958,13 @@ static void statusbar_bat_cb(lv_timer_t *timer) {
 #else
     lv_statusbar_t * statusbar = (lv_statusbar_t *)ui_StatusPanel;
 #endif
-    float bat = m_context_rtc.RTC_voltage_bat;
-    char tmp[24], *p = tmp;
-    const char *r;
+    char tmp[24];
     lv_obj_t *panel;
-    uint8_t full = bat > 4.5 ? 110 
-                : bat >= 4.2 ? 101
-#if defined(CONFIG_LOGGER_ADC_ENABLED)
-                : calc_bat_perc_v(bat);
-#else
-                : 51;
-#endif
+    const char * s = bat_to_char(&tmp[0], m_context_rtc.bat_view);
     if ((panel = statusbar->bat_label)) {
-
-        if(full<100) *p++=' ';
-        p += bat_to_char(p, full > 100 ? 100 : full);
         set_label_text_safe(panel, &tmp[0], 0);
     }
-
     if ((panel = statusbar->bat_image)) {
-        const char * s = adc_on_ac() ? LV_SYMBOL_CHARGE
-                : full < 10  ? LV_SYMBOL_BATTERY_EMPTY
-                : full < 20  ? LV_SYMBOL_BATTERY_1
-                : full < 60  ? LV_SYMBOL_BATTERY_2
-                : full < 101 ? LV_SYMBOL_BATTERY_FULL
-                : full < 110 ? LV_SYMBOL_CHARGE
-                            : LV_SYMBOL_USB;
         set_label_text_safe(panel,s, 0);
 // #if !defined(CONFIG_LCD_IS_EPD)
 //         lv_obj_set_style_text_color(panel, full>20 ? lv_color_hex(0xFFFFFF) : full>10 ? lv_color_hex(0xEECE44) : lv_color_hex(0xE32424), LV_PART_MAIN | LV_STATE_DEFAULT );
@@ -984,9 +981,7 @@ static void statusbar_bat_cb(lv_timer_t *timer) {
  * @param timer Pointer to the timer triggering this callback.
  */
 static void statusbar_gps_cb(lv_timer_t *timer) {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __func__);
-#endif
+    FUNC_ENTRY(TAG);
 #if defined(STATUS_PANEL_V1)
     ui_status_panel_t * statusbar = &ui_status_panel;
     if(!statusbar->parent) {
@@ -997,7 +992,11 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
 #endif
     const struct main_ctx_s *ctx = 0;
     if(timer){
+#if (LVGL_VERSION_MAJOR < 9)
         ctx = timer->user_data;
+#else
+        ctx  = lv_timer_get_user_data(timer);
+#endif
         speed_info_bar_update_low_speed_seconds();
         if(ctx->cur_screen == CUR_SCREEN_GPS_SPEED) {
             speed_info_bar_update();
@@ -1024,22 +1023,23 @@ static void statusbar_gps_cb(lv_timer_t *timer) {
     }
     char tmp[24], *p;
     if ((panel = statusbar->sat_info_label)) {
-        p = tmp;
-        *p = 0;
         if (ctx->app_mode == APP_MODE_GPS && ubx_dev->is_on) {
+            p = tmp;
+            *p = 0;
             if (lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
                 lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
             }
-            if(ubx_dev->ubx_msg.navDOP.hDOP > 0 && ubx_dev->ubx_msg.navDOP.hDOP < 1000){
-                *(p++) = 'h';
-                p += f2_to_char(ubx_dev->ubx_msg.navDOP.hDOP/100.0f, p);
-            }
-            if(ubx_dev->ubx_msg.navPvt.sAcc > 0 && ubx_dev->ubx_msg.navPvt.sAcc < 1000) {
-                *(p++) = 'a';
-                p += f1_to_char(MM_TO_M(ubx_dev->ubx_msg.navPvt.sAcc), p);
-            }
-            *p=0;
-            set_label_text_safe(panel, &tmp[0], 0);
+            set_label_text_safe(panel, speed_units[c_gps_cfg.speed_unit], 1);
+            // if(ubx_dev->ubx_msg.navDOP.hDOP > 0 && ubx_dev->ubx_msg.navDOP.hDOP < 1000){
+            //     *(p++) = 'h';
+            //     p += f2_to_char(ubx_dev->ubx_msg.navDOP.hDOP/100.0f, p);
+            // }
+            // if(ubx_dev->ubx_msg.navPvt.sAcc > 0 && ubx_dev->ubx_msg.navPvt.sAcc < 1000) {
+            //     *(p++) = 'a';
+            //     p += f1_to_char(MM_TO_M(ubx_dev->ubx_msg.navPvt.sAcc), p);
+            // }
+            // *p=0;
+            // set_label_text_safe(panel, &tmp[0], 0);
         }
         else {
             if (!lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN)) {
@@ -1124,9 +1124,7 @@ static lv_timer_t * temp_timer = 0;
 static lv_timer_t * gps_speed_timer = 0;
 
 void update_lv_timers() {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __func__);
-#endif
+    FUNC_ENTRY(TAG);
     if(m_app_ctx.app_mode == APP_MODE_SLEEP) {
         statusbar_time_cb(0);
         statusbar_bat_cb(0);
@@ -1179,9 +1177,7 @@ void update_lv_timers() {
 }
 
 void stop_lv_timers() {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __func__);
-#endif
+    FUNC_ENTRY(TAG);
     if(gps_timer) {
         lv_timer_del(gps_timer);
         gps_timer = 0;
@@ -1227,7 +1223,7 @@ static void update_sat_count(const struct ubx_config_s *ubx_dev) {
     for(uint8_t i=0; i < nav_sat->numSvs; i++) {
         sat = &nav_sat->sat[i];
 #if (C_LOG_LEVEL < 1)
-        DLOG(TAG, "sat[%hhu]: %hhu, %hhu, %hhu, %hhu, %hu, %lu %lu %lu\n", i, sat->gnssId, sat->svId, sat->cno, sat->elev, sat->azim, sat->flags, (sat->flags & 0x08), (sat->flags & 0x07));
+        DLOG(TAG, "sat[%hhu]: %hhu, %hhu, %hhu, %hhu, %hu, %lu %lu %lu", i, sat->gnssId, sat->svId, sat->cno, sat->elev, sat->azim, sat->flags, (sat->flags & 0x08), (sat->flags & 0x07));
 #endif
         if((sat->flags & 0x08u) == 0 || (sat->flags & 0x07u) < 4) {
             continue;
@@ -1258,15 +1254,13 @@ static void update_sat_count(const struct ubx_config_s *ubx_dev) {
                 break;
         }
     }
-#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "gnss: %hhu, count: %hhu, G:%hhu, S:%hhu, E:%hhu, B:%hhu, Q:%hhu, R:%hhu, N:%hhu", rtc_config.gnss, nav_sat->numSvs, display_state.sat_count.gps, display_state.sat_count.sbas, display_state.sat_count.galileo, display_state.sat_count.beidou, display_state.sat_count.qzss, display_state.sat_count.glonass, display_state.sat_count.navic);
-#endif
 }
 
 static size_t update_gps_info_row_str(const struct ubx_config_s *ubx_dev, char * p) {
     if(!ubx_dev) return 0;
     char * pc = p;
-    if(ubx_dev->config_progress) {
+    if(ubx_dev->setup_progress) {
         memcpy(pc, "initializing", 12), pc += 12;
     } else if(ubx_dev->ready) {
         if(rtc_config.hw_type == UBX_HW_TYPE_DEFAULT) {
@@ -1314,7 +1308,13 @@ static size_t update_gps_info_row_str(const struct ubx_config_s *ubx_dev, char *
 static size_t update_gps_desc_row_str(const struct gps_context_s * gps, char * p) {
     char * pb = p;
     memcpy(pb, "bat: ", 5), pb += 5;
+#if defined(CONFIG_LOGGER_ADC_ENABLED)
+    float bat_voltage;
+    get_battery_voltage_for_display(0, m_context_rtc.RTC_voltage_bat, &bat_voltage);
+    pb += f2_to_char(bat_voltage, pb);
+#else
     pb += f2_to_char(m_context_rtc.RTC_voltage_bat, pb);
+#endif
     memcpy(pb, "V ", 2), pb += 2;
     if(gps->first_fix){
         memcpy(pb, " fx: ", 5), pb += 5;
@@ -1331,9 +1331,7 @@ static size_t update_gps_desc_row_str(const struct gps_context_s * gps, char * p
 
 static uint32_t _update_screen(const struct display_s *me, const screen_mode_t screen_mode, void *arg) {
     uint32_t buf_update_count = display_get_buf_update_count();
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s] buf_update_count:%ld mode: %d", __func__, buf_update_count, screen_mode);
-#endif
+    FUNC_ENTRY_ARGS(TAG, " buf_update_count:%ld mode: %d", buf_update_count, screen_mode);
     uint32_t ret = 0;
     UNUSED_PARAMETER(ret);
     if(display_refresh_lock(portMAX_DELAY) == pdTRUE) {
@@ -1342,7 +1340,8 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
         bool is_gps_stat_screen = (screen_mode >= SCREEN_MODE_SPEED_STATS_1 && screen_mode <= SCREEN_MODE_SPEED_STATS_10);
         display_state.update_delay = 50;
         // ESP_LOGI(TAG, "update screen: mode:%" PRIu8 ", update nr:%lu", screen_mode, buf_update_count);
-        int state = (int)arg;
+        int state = (arg ? *(int*)arg : 0);
+        printf("_update screen: mode:%d, state:%d\n", screen_mode, state);
         int isnew = 0;
         lv_obj_t *panel = 0;
         stat_screen_t *sc_data = 0;
@@ -1409,12 +1408,27 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 struct push_forwarder_s * pf = (struct push_forwarder_s*)arg;
                 showPushScreen(pf->state, pf->title);
                 break;
+            case SCREEN_MODE_CHARGE:
+                if(state == ADC_BATTERY_CHARGING_STARTED)
+                    memcpy(pb, "Charging ", 9), pb += 9;
+                else if(state == ADC_BATTERY_CHARGING_STOPPED)
+                    memcpy(pb, "Stopped ", 8), pb += 8;
+                else if(state == ADC_BATTERY_NORMAL)
+                    memcpy(pb, "Good ", 5), pb += 5;
+                else if(state == ADC_BATTERY_HIGH)
+                    memcpy(pb, "Full ", 5), pb += 5;
+                pb += f2_to_char(m_context_rtc.RTC_voltage_bat, pb);
+                showChargeScreen(state, &str1[0]);
+                display_state.update_delay = 1000;
+                break;
             case SCREEN_MODE_SD_TROUBLE:
                 showSdTroubleScreen();
                 break;
             case SCREEN_MODE_LOW_BAT:
                 link_for_low_bat:
-                showLowBatScreen(0);
+                memcpy(pb, "Battery low ", 12), pb += 12;
+                pb += f2_to_char(m_context_rtc.RTC_voltage_bat, pb);
+                showLowBatScreen(&str1[0]);
                 break;
             case SCREEN_MODE_FW_UPDATE:
                 const v_settings_t *s = arg;
@@ -1508,9 +1522,7 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
             case SCREEN_MODE_WIFI_START:
             case SCREEN_MODE_WIFI_AP:
             case SCREEN_MODE_WIFI_STATION:
-#if (C_LOG_LEVEL < 2)
-                DLOG(TAG, "[%s] %s, wifi %d\n", __func__, scr_mode_str, screen_mode);
-#endif
+                DLOG(TAG, "[%s] %s, wifi %d", __func__, scr_mode_str, screen_mode);
                 // display_state.update_delay = 100;
 #if defined(CONFIG_LCD_IS_EPD)
                 ui_set_main_cnt_offset(&ui_info_screen.screen, offset);
@@ -1561,38 +1573,26 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
             uint8_t r, c, n, rows, cols;
             if (sc_data->num_fields == 6) {
 #if defined(CONFIG_SSD168X_PANEL_SSD1681)
-#if (C_LOG_LEVEL < 2)
-                DLOG(TAG, "[%s] stats panel: 6Row x 1Slot\n", __func__);
-#endif
+                DLOG(TAG, "[%s] stats panel: 6Row x 1Slot", __func__);
                 rows = 6, cols = 1;
 #else
-#if (C_LOG_LEVEL < 2)
-                DLOG(TAG, "[%s] stats panel: 3Row x 2Slot\n", __func__);
-#endif
+                DLOG(TAG, "[%s] stats panel: 3Row x 2Slot", __func__);
                 rows = 3, cols = 2;
 #endif
             } 
             else if (sc_data->num_fields == 4) {
 #if defined(CONFIG_SSD168X_PANEL_SSD1681)
-#if (C_LOG_LEVEL < 2)
-                DLOG(TAG, "[%s] stats panel: 4Row x 1Slot\n", __func__);
-#endif
+                DLOG(TAG, "[%s] stats panel: 4Row x 1Slot", __func__);
                 rows = 4, cols = 1;
 #else
-#if (C_LOG_LEVEL < 2)
-                DLOG(TAG, "[%s] stats panel: 2Row x 2Slot\n", __func__);
-#endif
+                DLOG(TAG, "[%s] stats panel: 2Row x 2Slot", __func__);
                 rows = 2, cols = 2;
 #endif
             } else if (sc_data->num_fields == 2) {
-#if (C_LOG_LEVEL < 2)
-                DLOG(TAG, "[%s] stats panel: 2Row x 1Slot\n", __func__);
-#endif
+                DLOG(TAG, "[%s] stats panel: 2Row x 1Slot", __func__);
                 rows = 2, cols = 1;
             } else {
-#if (C_LOG_LEVEL < 2)
-                DLOG(TAG, "[%s] stats panel: 3Row x 1Slot\n", __func__);
-#endif
+                DLOG(TAG, "[%s] stats panel: 3Row x 1Slot", __func__);
                 rows = 3, cols = 1;
             }
 #if defined(CONFIG_LCD_IS_EPD)
@@ -1652,7 +1652,7 @@ uint32_t screen_cb(void* arg) {
     // const uint32_t lcd_count = get_lcd_ui_count();
     uint32_t buf_update_count = display_get_buf_update_count();
 #if (C_LOG_LEVEL < 2)
-    ILOG(TAG, "[%s] %ld app_mode: %s, cur_screen: %s, next_screen: %s", __func__, buf_update_count, app_mode_str[ctx->app_mode], cur_screen_str[ctx->cur_screen], cur_screen_str[ctx->next_screen]);
+    FUNC_ENTRY_ARGS(TAG, "%ld app_mode: %s, cur_screen: %s, next_screen: %s", buf_update_count, app_mode_str[ctx->app_mode], cur_screen_str[ctx->cur_screen], cur_screen_str[ctx->next_screen]);
     DMEAS_START();
 #endif
     // struct display_s *dspl = &display;
@@ -1689,6 +1689,18 @@ uint32_t screen_cb(void* arg) {
         }
     }
 #endif
+
+    // Check if ADC has notified us of a charge event or if we're in charge mode
+    if(adc_check_and_clear_lcd_charge_flag() || ctx->app_mode == APP_MODE_CHARGE) {
+        int32_t adc_state = get_adc_state();
+        delay = _update_screen(display_state.display, SCREEN_MODE_CHARGE, (void*)(&adc_state));
+        // Flag is automatically cleared by adc_check_and_clear_lcd_charge_flag()
+        ctx->cur_screen = CUR_SCREEN_CHARGE;
+#if defined(CONFIG_LCD_IS_EPD)
+        if(ctx->app_mode == APP_MODE_CHARGE) goto fasttimer;
+#endif
+        goto end;
+    }
 
     if(m_app_ctx.ctx->firmware_update_started>=1 && ctx->next_screen == CUR_SCREEN_FW_UPDATE) {
         struct m_config_item_s item = {.name = "Confirm"};
@@ -1732,9 +1744,7 @@ uint32_t screen_cb(void* arg) {
         goto end;
     }
     else if ((!m_app_ctx.screen_auto_refresh && display_get_buf_update_count() < 2) || ctx->app_mode == APP_MODE_BOOT) {
-#if (C_LOG_LEVEL < 2)
-        ILOG(TAG, "[%s] Boot screen requested lcd_count: %lu, app_mode: %s", __func__, buf_update_count, app_mode_str[ctx->app_mode]);
-#endif
+        DLOG(TAG, "[%s] Boot screen requested lcd_count: %lu, app_mode: %s", __func__, buf_update_count, app_mode_str[ctx->app_mode]);
         delay = _update_screen(display_state.display, SCREEN_MODE_BOOT, 0);
         ctx->cur_screen = CUR_SCREEN_BOOT;
         goto end;
@@ -1746,7 +1756,7 @@ uint32_t screen_cb(void* arg) {
         goto end;
     }
 
-    else if(m_app_ctx.low_bat_countdown) {
+    else if(get_adc_state() == ADC_BATTERY_LOW || get_adc_state() == ADC_BATTERY_CRITICAL_LOW) {
         delay=_update_screen(display_state.display, SCREEN_MODE_LOW_BAT, 0);
         ctx->cur_screen = CUR_SCREEN_LOW_BAT;
         goto end;
@@ -1914,10 +1924,13 @@ uint32_t screen_cb(void* arg) {
     if(ctx->cur_screen == CUR_SCREEN_WIFI && ((!m_app_ctx.wifi_ctx->s_sta_connection && !m_app_ctx.wifi_ctx->s_ap_connection) || (m_app_ctx.wifi_ctx->s_sta_connection && !m_app_ctx.wifi_ctx->s_sta_connected)) ) {
         goto fasttimer;
     }
-    if((ctx->cur_screen == CUR_SCREEN_GPS_TROUBLE || ctx->cur_screen == CUR_SCREEN_SD_TROUBLE || ctx->cur_screen == CUR_SCREEN_LOW_BAT)) {
+    if((ctx->cur_screen == CUR_SCREEN_GPS_TROUBLE 
+    || ctx->cur_screen == CUR_SCREEN_SD_TROUBLE 
+    || ctx->cur_screen == CUR_SCREEN_LOW_BAT)) {
         fasttimer:
-        if(!get_display_timer_period())
+        if(!get_display_timer_period()){
             display_timer_set_period(5);
+        }
     }
     else if(get_display_timer_period()) {
         display_timer_set_period(0);
@@ -1932,18 +1945,29 @@ uint32_t screen_cb(void* arg) {
 
 display_op_t screen_ops = {
     .screen_cb = screen_cb,
+    .ui_init = ui_init,
+    .ui_deinit = ui_deinit,
 };
 
+static bool lcd_initialized = false;
+
 struct display_s *lcd_init() {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
+    if(lcd_initialized) return display_state.display;
     display_init(display_state.display, &screen_ops);
+    lcd_initialized = true;
     return display_state.display;
 }
 
 void lcd_deinit() {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
+    if(!lcd_initialized) return;
+    if(lcd_initialized) {
+        lcd_initialized = false;
+    }
     stop_lv_timers();
     display_uninit(display_state.display);
+    display_state.display = 0;
 }
 
 #endif

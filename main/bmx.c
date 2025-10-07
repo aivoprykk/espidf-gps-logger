@@ -57,6 +57,10 @@ static void periodic_timer_callback(void *arg) {
 }
 
 esp_err_t init_bmx() {
+#if (C_LOG_LEVEL < 3)
+    ILOG(TAG, "[%s]", __FUNCTION__);
+#endif
+    if(bmx_stat.initialized) return ESP_OK;
     esp_err_t ret = ESP_OK;
     i2c_config_t i2c_cfg = {
         .mode = I2C_MODE_MASTER,
@@ -106,14 +110,20 @@ esp_err_t init_bmx() {
         }
         //xTaskCreatePinnedToCore(bmx_task, "bmx_task", BMX_TASK_STACK_SIZE, NULL, 0, &t1, 1);
     }
-
+    bmx_stat.initialized = 1;
     return ret;
 }
 
 void deinit_bmx() {
+    if(!bmx_stat.initialized) return;
     vTaskDelete(t1);
     t1 = 0;
     bmx280_close(bmx280);
+    bmx_stat.initialized = 0;
+}
+
+bool bmx_is_initialized() {
+    return bmx_stat.initialized == 1;
 }
 
 bmx_t *bmx_readings() {

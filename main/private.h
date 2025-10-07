@@ -22,6 +22,13 @@ extern "C" {
 #include "display.h"
 #endif
 
+#include "ui.h"
+
+#ifdef CONFIG_LOGGER_ADC_ENABLED
+#include "adc_events.h"
+#include "adc.h"
+#endif
+
 #if (C_LOG_LEVEL < 2)
 extern const char * const app_mode_str[];
 extern const char * const cur_screen_str[];
@@ -66,7 +73,8 @@ l(APP_MODE_WIFI) \
 l(APP_MODE_GPS) \
 l(APP_MODE_SLEEP) \
 l(APP_MODE_SHUT_DOWN) \
-l(APP_MODE_RESTART)
+l(APP_MODE_RESTART) \
+l(APP_MODE_CHARGE)
 
 #define CUR_SCREEN_LIST(l) \
 l(CUR_SCREEN_NONE) \
@@ -82,7 +90,8 @@ l(CUR_SCREEN_LOW_BAT) \
 l(CUR_SCREEN_SETTINGS) \
 l(CUR_SCREEN_BOOT) \
 l(CUR_SCREEN_FW_UPDATE) \
-l(CUR_SCREEN_SD_TROUBLE)
+l(CUR_SCREEN_SD_TROUBLE) \
+l(CUR_SCREEN_CHARGE)
 
 #if defined(CONFIG_LOGGER_SPEED_SCREEN_VARIANT)
 #define LL3(l) l(SCREEN_MODE_SPEED_2)
@@ -119,6 +128,7 @@ l(CUR_SCREEN_SD_TROUBLE)
     l(SCREEN_MODE_OFF_SCREEN) \
     l(SCREEN_MODE_FW_UPDATE) \
     l(SCREEN_MODE_SPEED_1) \
+    l(SCREEN_MODE_CHARGE) \
     LL3(l) \
 
 typedef enum {
@@ -133,7 +143,7 @@ l(CFG_GROUP_STAT_SCREENS, 1) \
 l(CFG_GROUP_SCREEN, 2) \
 l(CFG_GROUP_FW, 3)
 
-typedef enum {
+typedef enum app_mode_s {
     APP_MODE_LIST(ENUM)
 } app_mode_t;
 
@@ -211,7 +221,6 @@ typedef struct main_ctx_s {
     uint8_t fw_update_screen;
     uint8_t cfg_screen;
     uint8_t button_press_mode;
-    uint8_t low_bat_countdown;
     uint8_t low_bat_count;
     uint8_t record_done;
     bool button_down;

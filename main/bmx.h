@@ -18,12 +18,15 @@ typedef struct {
     uint32_t millis;
     uint32_t elapsed;
     int status;
+    int8_t initialized;
 } bmx_t;
+
 int init_bmx();
 void deinit_bmx();
 bmx_t * bmx_readings();
 int bmx_readings_i(int32_t * temp, uint32_t * press, uint32_t * humid);
 int bmx_readings_f(float * temp, float * press, float * humid);
+bool bmx_is_initialized();
 
 #endif
 

@@ -4,9 +4,9 @@ set(pdir ${CMAKE_CURRENT_SOURCE_DIR}/../)
 ##second stage !important! after component register
 
 set(srcs
-"hid.c"
-"lcd.c"
-"main.c"
+    "hid.c"
+    "lcd.c"
+    "main.c"
 )
 
 set(INCS
@@ -18,8 +18,29 @@ if(CONFIG_BMX_ENABLE)
 set(srcs ${srcs} bmx.c)
 endif()
 
-idf_component_register(SRCS ${srcs} 
-    INCLUDE_DIRS ${INCS} 
+if(CONFIG_DISPLAY_ENABLED)
+if(CONFIG_DISPLAY_USE_LVGL)
+
+SET(lvui_dir lvui)
+FILE(GLOB UISRCS  ${lvui_dir}/*.c ${lvui_dir}/screens/*.c)
+FILE(GLOB UIFONTS ${lvui_dir}/fonts/ui_font*.c)
+
+if(CONFIG_DISPLAY_DRIVER_ST7789 OR CONFIG_DISPLAY_DRIVER_QEMU)
+    FILE(GLOB UIIMAGES ${lvui_dir}/img16b/*.c)
+else()
+    FILE(GLOB UIIMAGES ${lvui_dir}/img8b/*.c)
+endif()
+
+SET(INCS ${INCS} ${lvui_dir}/include)
+
+endif()
+endif()
+
+
+
+# Register ULP sources with the component
+idf_component_register(SRCS ${srcs} ${UISRCS} ${UIFONTS} ${UIIMAGES}
+    INCLUDE_DIRS ${INCS}
     PRIV_REQUIRES logger_common strutil logger_context logger_config
 )
 

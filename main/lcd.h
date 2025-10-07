@@ -9,9 +9,6 @@ extern "C" {
 
 #include <stdint.h>
 #include "sdkconfig.h"
-#if defined(CONFIG_DISPLAY_ENABLED)
-#include "display.h"
-#endif
 
 struct display_s *lcd_init();
 void lcd_deinit();

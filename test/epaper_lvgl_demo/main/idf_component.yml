@@ -1,0 +1,15 @@
+dependencies:
+  idf: ">=5.0"
+  lvgl/lvgl: ">8.3.0,<9.0.0"
+  esp_lcd_panel_ssd1680: 
+    path: "../../../components/esp_lcd_panel_ssd1680"
+  display:
+    path: "../../../components/display"
+  logger_common:
+    path: "../../../components/logger_common"
+  logger_button:
+    path: "../../../components/logger_button"
+  logger_adc:
+    path: "../../../components/logger_adc"
+  strutil:
+    path: "../../../components/strutil"

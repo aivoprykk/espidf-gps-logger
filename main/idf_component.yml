@@ -2,6 +2,7 @@
 dependencies:
 ## Required IDF version
   idf: ">=5.3"
+  lvgl/lvgl: ">8.3.0,<9.0.0"
   # # Put list of dependencies here
   # # For components maintained by Espressif:
   # component: "~1.0.0"

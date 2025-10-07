@@ -1,0 +1,8 @@
+b=$(echo $PWD|sed 's/.*logger//g');
+a=$(cat version.txt|sed 's/\.//g;s/dev/.dev/');
+d=espidf-gps-logger-$a.bin;
+e=root@10.10.19.239
+f=/var/www/esplogger/prod/public/api/firmware/versions
+if [ "$b" != "" ]; then c=espidf-gps-logger-$a$b.bin;
+else ssh $e "[ -e $f/$a ] || mkdir $f/$a; [ -e $f/$a/esp-idf-gps-logger-$a.bin ] || ln -s $d $f/$a/esp-idf-gps-logger-$a.bin";fi; 
+rsync -av build/$d $e:$f/$a/$c;

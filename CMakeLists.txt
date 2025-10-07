@@ -56,7 +56,11 @@ project(${PROJECT_NAME}-${PROJECT_VER_NUM})
 idf_build_set_property(COMPILE_OPTIONS "-fdiagnostics-color=always" APPEND)
 idf_build_get_property(lv_conf LV_CONF_PATH)
 if(lv_conf)
-idf_build_set_property(COMPILE_OPTIONS "-DLV_CONF_PATH=${lv_conf}" APPEND)
+if(LVGL_VERSION_MAJOR GREATER 8)
+    idf_build_set_property(COMPILE_OPTIONS "-DLV_CONF_PATH=\"${lv_conf}\"" APPEND)
+else()
+    idf_build_set_property(COMPILE_OPTIONS "-DLV_CONF_PATH=${lv_conf}" APPEND)
+endif()
 endif()
 
 # Display Compile Time Information

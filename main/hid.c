@@ -38,7 +38,11 @@ static uint8_t button_clicks = 0;
 #endif
 
 static void button_timer_cb(void *arg) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
+#if defined(CONFIG_LOGGER_ADC_ENABLED)
+    // Resume ADC events after button processing - voltage should be stable now
+    adc_resume_events("Button processing complete");
+#endif
 #if (defined(CONFIG_UBLOX_ENABLED) && defined(CONFIG_GPS_LOG_ENABLED))
     ubx_config_t *ubx_dev = m_context.gps.ubx_device;
     const ubx_hw_t hw_type = ubx_dev->rtc_conf->hw_type;
@@ -47,9 +51,7 @@ static void button_timer_cb(void *arg) {
     uint8_t flush_times = 1;
 #endif
     if(button_clicks == 1) {
-#if (C_LOG_LEVEL < 2)
-        ILOG(TAG, "[%s] Button single click arrived, %s.", __func__, m_app_ctx.button_press_mode == 3 ? "lllong" : m_app_ctx.button_press_mode == 2 ? "llong" : m_app_ctx.button_press_mode == 1 ? "long" : "short");
-#endif
+        DLOG(TAG, "[%s] Button single click arrived, %s.", __func__, m_app_ctx.button_press_mode == 3 ? "lllong" : m_app_ctx.button_press_mode == 2 ? "llong" : m_app_ctx.button_press_mode == 1 ? "long" : "short");
         int8_t fast_refr_time = -1;
         if(m_app_ctx.button_press_mode==3) { // long long long press
             if(m_app_ctx.next_screen == CUR_SCREEN_SETTINGS||m_app_ctx.next_screen == CUR_SCREEN_FW_UPDATE) m_app_ctx.next_screen = CUR_SCREEN_NONE;
@@ -63,8 +65,8 @@ static void button_timer_cb(void *arg) {
                 if(m_app_ctx.next_screen == CUR_SCREEN_SETTINGS) m_app_ctx.next_screen = CUR_SCREEN_NONE;
                 // lcd_ui_request_full_refresh(0);
             } else if (m_app_ctx.app_mode == APP_MODE_WIFI && m_app_ctx.app_mode_wifi_on == 1) {
-                // m_app_ctx.app_mode = APP_MODE_GPS;
-                m_context.request_restart = true;
+                m_app_ctx.app_mode = APP_MODE_GPS;
+                // m_context.request_restart = true;
                 goto done;
             }
 #else
@@ -75,17 +77,13 @@ static void button_timer_cb(void *arg) {
         }
         else if (m_app_ctx.button_press_mode==1) { // long press
             if (m_app_ctx.next_screen == CUR_SCREEN_SETTINGS){
-#if (C_LOG_LEVEL < 2)
-                ILOG(TAG, "[%s] settings new screen requested %d", __func__, 1);
-#endif
+                DLOG(TAG, "[%s] settings new screen requested %d", __func__, 1);
                     if(m_app_ctx.cfg_screen >= L_CFG_GROUP_FIELDS-1)
                         m_app_ctx.cfg_screen = 0;
                     else
                         ++m_app_ctx.cfg_screen;
             } else if (m_app_ctx.cur_screen == CUR_SCREEN_FW_UPDATE){
-#if (C_LOG_LEVEL < 2)
-                ILOG(TAG, "[%s] fw update choice saved %d", __func__, 1);
-#endif
+                DLOG(TAG, "[%s] fw update choice saved %d", __func__, 1);
                 if(m_app_ctx.fw_update_screen == 0) {
                     m_context.fw_update_is_allowed = 1;
                 } else if(m_app_ctx.fw_update_screen == 1) {
@@ -102,10 +100,17 @@ static void button_timer_cb(void *arg) {
 // #endif
         }
         else if (m_app_ctx.button_press_mode==0) { // just click
-            if (m_app_ctx.cur_screen == CUR_SCREEN_FW_UPDATE){
-#if (C_LOG_LEVEL < 2)
-                ILOG(TAG, "[%s] fw update next choice %d", __func__, 1);
+            if (m_app_ctx.app_mode == APP_MODE_CHARGE) {
+                // in charge mode, ignore long press
+                m_context.request_restart = true;
+#if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
+                adc_ulp_clear_last_wake_reason();
 #endif
+                goto refresh;
+            }
+            
+            else if (m_app_ctx.cur_screen == CUR_SCREEN_FW_UPDATE){
+                DLOG(TAG, "[%s] fw update next choice %d", __func__, 1);
                     if(m_app_ctx.fw_update_screen >= config_fw_update_item_count-1)
                         m_app_ctx.fw_update_screen = 0;
                     else
@@ -113,9 +118,7 @@ static void button_timer_cb(void *arg) {
                 goto refresh;
             }
             else if(m_app_ctx.cur_screen == CUR_SCREEN_SETTINGS) {
-#if (C_LOG_LEVEL < 2)
-                ILOG(TAG, "[%s] settings next requested %d", __func__, 1);
-#endif
+                DLOG(TAG, "[%s] settings next requested %d", __func__, 1);
                 if(m_app_ctx.cfg_screen == CFG_GROUP_GPS) {
                     if(m_app_ctx.gps_cfg_item < (CFG_GPS_ITEM_BASE))
                         m_app_ctx.gps_cfg_item = CFG_GPS_ITEM_BASE;
@@ -141,9 +144,7 @@ static void button_timer_cb(void *arg) {
             }
             if (m_app_ctx.app_mode == APP_MODE_GPS){
                 if(m_app_ctx.cur_screen == CUR_SCREEN_GPS_SPEED) {
-#if (C_LOG_LEVEL < 2)
-                   ILOG(TAG, "[%s] gps info next screen requested, cur: %hhu", __func__, m_context.config->screen.speed_field);
-#endif
+                    DLOG(TAG, "[%s] gps info next screen requested, cur: %hhu", __func__, m_context.config->screen.speed_field);
                     m_context.config->screen.speed_field++;
                     if (m_context.config->screen.speed_field >= config_speed_field_item_count)
                         m_context.config->screen.speed_field = 1;
@@ -151,9 +152,7 @@ static void button_timer_cb(void *arg) {
                 }
                 else if(m_app_ctx.cur_screen==CUR_SCREEN_GPS_STATS) {
                     if(++m_context.stat_screen_cur >= gps_stat_screen_item_count) m_context.stat_screen_cur = 0;
-#if (C_LOG_LEVEL < 2)
-                    ILOG(TAG, "[%s] next screen requested, cur: %hhu", __func__, m_context.stat_screen_cur);
-#endif
+                    DLOG(TAG, "[%s] next screen requested, cur: %hhu", __func__, m_context.stat_screen_cur);
                     // m_app_ctx.stat_screen_count = gps_stat_screen_item_count;
                 }
             }
@@ -166,66 +165,32 @@ static void button_timer_cb(void *arg) {
 #endif
     }
     else if(button_clicks==2) {
-#if (C_LOG_LEVEL < 2)
-        ILOG(TAG, "[%s] Button double click arrived, %s", __func__,  m_app_ctx.button_press_mode == 3 ? "lllong" :  m_app_ctx.button_press_mode == 2 ? "llong" :  m_app_ctx.button_press_mode == 1 ? "long" : "short");
-#endif
+        DLOG(TAG, "[%s] Button double click arrived, %s", __func__,  m_app_ctx.button_press_mode == 3 ? "lllong" :  m_app_ctx.button_press_mode == 2 ? "llong" :  m_app_ctx.button_press_mode == 1 ? "long" : "short");
         if (m_app_ctx.app_mode == APP_MODE_GPS) {
             if(m_app_ctx.next_screen == CUR_SCREEN_GPS_INFO || m_app_ctx.cur_screen == CUR_SCREEN_GPS_INFO) {
-#if (C_LOG_LEVEL < 2)
-                ILOG(TAG, "[%s] setting screen requested", __func__);
-#endif
+                DLOG(TAG, "[%s] setting screen requested", __func__);
                 m_app_ctx.next_screen = CUR_SCREEN_SETTINGS;
             }
             else if(m_app_ctx.next_screen==CUR_SCREEN_NONE) {
-#if (C_LOG_LEVEL < 2)
-                ILOG(TAG, "[%s] gps info screen requested", __func__);
-#endif
+                DLOG(TAG, "[%s] gps info screen requested", __func__);
                 m_app_ctx.next_screen = CUR_SCREEN_GPS_INFO;
             }
             else if(m_app_ctx.next_screen==CUR_SCREEN_SETTINGS) {
-#if (C_LOG_LEVEL < 2)
-                ILOG(TAG, "[%s] gps_stats screen requested", __func__);
-#endif
+                DLOG(TAG, "[%s] gps_stats screen requested", __func__);
                 m_app_ctx.next_screen = CUR_SCREEN_GPS_STATS;
             }
             else {
-#if (C_LOG_LEVEL < 2)
-                ILOG(TAG, "[%s] default screen requested", __func__);
-#endif
+                DLOG(TAG, "[%s] default screen requested", __func__);
                 m_app_ctx.next_screen = CUR_SCREEN_NONE;
             }
         }
 #if defined (CONFIG_LOGGER_WIFI_ENABLED)
         else if(m_app_ctx.app_mode == APP_MODE_WIFI) {
-            wifi_sta_conf_sync();
-#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(ENABLE_WIFI_AP_STA)
-            if(wifi_context.s_wifi_mode == wifi_mode_apsta) {
-#else
-            if(wifi_context.s_wifi_mode == wifi_mode_ap) {
-#endif
-#if (C_LOG_LEVEL < 2)
-                ILOG(TAG, "[%s] wifi sta mode requested", __func__);
-#endif
-                wifi_mode(1, 0); // wifi set station mode
+            DLOG(TAG, "[%s] WiFi mode change requested", __func__);
+            // WiFi module now handles the complete flow via callbacks
+            if (wifi_request_mode_change() != 0) {
+                WLOG(TAG, "[%s] WiFi mode change request failed", __func__);
             }
-            else 
-#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(ENABLE_WIFI_AP_STA)
-            if(wifi_context.s_wifi_mode == wifi_mode_sta)
-#endif
-            {
-#if (C_LOG_LEVEL < 2)
-                ILOG(TAG, "[%s] wifi ap mode requested", __func__);
-#endif
-                wifi_mode(0, 1); // wifi set station mode
-            }
-#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(ENABLE_WIFI_AP_STA)
-            else {
-#if (C_LOG_LEVEL < 2)
-                ILOG(TAG, "[%s] wifi sta + ap mode requested", __func__);
-#endif
-                wifi_mode(1, 1); // wifi set ap mode
-            }
-#endif
         }
 #endif
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
@@ -235,14 +200,10 @@ static void button_timer_cb(void *arg) {
 #endif
     }
     else if(button_clicks==3) {
-#if (C_LOG_LEVEL < 2)
-        ILOG(TAG, "[%s] Button triple click arrived, %s", __func__,  m_app_ctx.button_press_mode == 3 ? "lllong" :  m_app_ctx.button_press_mode == 2 ? "llong" :  m_app_ctx.button_press_mode == 1 ? "long" : "short");
-#endif
+        DLOG(TAG, "[%s] Button triple click arrived, %s", __func__,  m_app_ctx.button_press_mode == 3 ? "lllong" :  m_app_ctx.button_press_mode == 2 ? "llong" :  m_app_ctx.button_press_mode == 1 ? "long" : "short");
 #if (defined(CONFIG_UBLOX_ENABLED) && defined(CONFIG_GPS_LOG_ENABLED))
         if(!(m_app_ctx.app_mode == APP_MODE_GPS && m_app_ctx.next_screen == CUR_SCREEN_SETTINGS)) {
-#if (C_LOG_LEVEL < 2)
-            ILOG(TAG, "[%s] screen rotation change requested", __func__);
-#endif
+            DLOG(TAG, "[%s] screen rotation change requested", __func__);
             if(set_screen_cfg_item(m_app_ctx.config, CGG_SCREEN_ITEM_ROTATION_POS)) {
                 g_context_rtc_add_config(&m_context_rtc, m_context.config);
 #if defined(CONFIG_DISPLAY_ENABLED)
@@ -253,14 +214,10 @@ static void button_timer_cb(void *arg) {
         }
         if (m_app_ctx.app_mode == APP_MODE_GPS) {
             if(m_app_ctx.next_screen==CUR_SCREEN_SETTINGS) {
-#if (C_LOG_LEVEL < 2)
-                ILOG(TAG, "[%s] settings screen change requested", __func__);
-#endif
+                DLOG(TAG, "[%s] settings screen change requested", __func__);
                 if(m_app_ctx.cfg_screen == CFG_GROUP_GPS) {
                     if(set_gps_cfg_item(m_app_ctx.gps_cfg_item, 0)) {
-#if (C_LOG_LEVEL < 2)
-                        ILOG(TAG, "[%s] settings screen gps change saved", __func__);
-#endif
+                        DLOG(TAG, "[%s] settings screen gps change saved", __func__);
                         // g_context_ubx_add_config(&m_context, ubx_dev);
                         // g_context_rtc_add_config(&m_context_rtc, m_context.config);
                         // m_app_ctx.ubx_restart_requested = 1;
@@ -268,18 +225,14 @@ static void button_timer_cb(void *arg) {
                 }
                 else if(m_app_ctx.cfg_screen == CFG_GROUP_STAT_SCREENS) {
                     if(set_stat_screen_cfg_item(m_app_ctx.stat_screen_cfg_item)) {
-#if (C_LOG_LEVEL < 2)
-                        ILOG(TAG, "[%s] settings screen change requested", __func__);
-#endif
+                        DLOG(TAG, "[%s] settings screen change requested", __func__);
                         // g_context_add_config(&m_context, m_context.config);
                     }
                 }
                 else if(m_app_ctx.cfg_screen == CFG_GROUP_SCREEN) {
                     int changed = 0;
                     if((changed = (set_screen_cfg_item(m_app_ctx.config, m_app_ctx.screen_cfg_item)))) {
-#if (C_LOG_LEVEL < 2)
-                        ILOG(TAG, "[%s] settings screen change requested", __func__);
-#endif
+                        DLOG(TAG, "[%s] settings screen change requested", __func__);
                         g_context_rtc_add_config(&m_context_rtc, m_context.config);
 #if defined(CONFIG_DISPLAY_ENABLED)
                         if(changed == cfg_screen_rotation)
@@ -294,9 +247,7 @@ static void button_timer_cb(void *arg) {
                 }
                 else if(m_app_ctx.cfg_screen == CFG_GROUP_FW) {
                     if(set_fw_update_cfg_item(m_app_ctx.config, m_app_ctx.fw_cfg_item)) {
-#if (C_LOG_LEVEL < 2)
-                        ILOG(TAG, "[%s] settings fw change requested", __func__);
-#endif
+                        DLOG(TAG, "[%s] settings fw change requested", __func__);
                         // g_context_add_config(&m_context, m_context.config);
                     }
                 }
@@ -310,9 +261,7 @@ static void button_timer_cb(void *arg) {
         } 
 #endif
     } else if(button_clicks==4) {
-#if (C_LOG_LEVEL < 2)
-            ILOG(TAG, "[%s] Button 4 click arrived", __func__);
-#endif
+            DLOG(TAG, "[%s] Button 4 click arrived", __func__);
 #if !defined(CONFIG_LCD_IS_EPD)
             int changed = 0;
             if((changed = (set_screen_cfg_item(m_app_ctx.config, CGG_SCREEN_ITEM_BRIGHTNESS_POS)))) {
@@ -331,24 +280,28 @@ static void button_timer_cb(void *arg) {
 #endif
     }
     done:
-#if defined(CONFIG_DISPLAY_ENABLED)
+#if defined(CONFIG_LOGGER_ADC_ENABLED)
+    // Ensure ADC events are resumed even if we goto done early
+    adc_resume_events("Button processing done");
+#endif
+#if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
     display_cancel_delay();
 #endif
     button_clicks = 0;
     m_app_ctx.button_press_mode = -1;
+    
 }
 
 static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
     uint32_t tm = time/1000;
     l_button_t *btn = 0;
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s] num: %d event: %s", __func__, ev, l_button_ev_list[ev]);
-#endif
+    FUNC_ENTRY_ARGS(TAG, " num: %d event: %s", ev, l_button_ev_list[ev]);
     //ESP_LOGI(TAG, "Button %d event: %d, time: %ld ms", num, ev, tm);
     switch (ev) {
     case L_BUTTON_UP:
         m_app_ctx.button_down = false;
         if(num==0) {
+            // ADC events remain suppressed during timer wait - will be resumed in button_timer_cb
             esp_timer_start_once(button_timer, BUTTON_CB_WAIT_BEFORE);
 #if defined(CONFIG_LOGGER_BUTTON_GPIO_1)
         } else if(num==1) {
@@ -373,11 +326,17 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
         break;
     case L_BUTTON_DOWN:
         if(esp_timer_is_active(button_timer)){
-#if (C_LOG_LEVEL < 3)
             ILOG(TAG,"[%s] cancel timer, num: %d", __FUNCTION__, num);
-#endif
             esp_timer_stop(button_timer);
+#if defined(CONFIG_LOGGER_ADC_ENABLED)
+            // Resume ADC events if timer was cancelled (previous button sequence done)
+            adc_resume_events("Button timer cancelled");
+#endif
         }
+#if defined(CONFIG_LOGGER_ADC_ENABLED)
+        // Suppress ADC events during button press - prevent voltage fluctuation false positives
+        adc_suppress_events("Button press operation");
+#endif
         m_app_ctx.button_down = true;
         m_app_ctx.button_press_mode = 0;
         button_clicks++;
@@ -393,9 +352,7 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
     case L_BUTTON_LONG_LONG_PRESS_START:
         if(num==0 && tm >= 9700) {
             m_app_ctx.button_press_mode = 3;
-#if (C_LOG_LEVEL < 2)
-            ILOG(TAG, "[%s] Button num: %d lllong press detected, time: %lld, restart requested.", __func__, num, time);
-#endif
+            DLOG(TAG, "[%s] Button num: %d lllong press detected, time: %lld, restart requested.", __func__, num, time);
             m_context.request_restart = true;
             break;
         }
@@ -417,8 +374,11 @@ static void button_cb(int num, l_button_ev_t ev, uint64_t time) {
     }
 }
 
+static bool button_initialized = false;
 void init_button() {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
+    if(button_initialized) return;
+    button_initialized = true;
     button_init();
     btns[0].cb = button_cb;
 #if defined(CONFIG_LOGGER_BUTTON_GPIO_1)
@@ -432,8 +392,20 @@ void init_button() {
     esp_timer_create(&button_timer_args, &button_timer);
 }
 void deinit_button() {
-    ILOG(TAG, "[%s]", __func__);
-    esp_timer_stop(button_timer);
+    FUNC_ENTRY(TAG);
+    if(!button_initialized) return;
+    button_initialized = false;
+    if (button_timer) {
+        if (esp_timer_is_active(button_timer)) {
+            esp_timer_stop(button_timer);
+        }
+        esp_timer_delete(button_timer);
+        button_timer = 0;
+    }
+#if defined(CONFIG_LOGGER_ADC_ENABLED)
+    // Ensure ADC events are resumed when button system shuts down
+    adc_resume_events("Button system deinit");
+#endif
     button_deinit();
 }
 #endif

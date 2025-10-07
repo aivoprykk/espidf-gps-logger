@@ -6,6 +6,7 @@
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
+#include <math.h>
 #if defined(CONFIG_LOGGER_USE_WDT)
 #include "esp_task_wdt.h"
 //#include "rtc_wdt.h"
@@ -71,6 +72,7 @@
 // events
 #include "config_events.h"
 #include "logger_events.h"
+#include "logger_buffer_pool.h"
 
 ESP_EVENT_DEFINE_BASE(LOGGER_EVENT);
 
@@ -83,9 +85,6 @@ static const char *TAG = "main";
 
 extern struct context_s m_context;
 extern struct context_rtc_s m_context_rtc;
-#ifdef CONFIG_LOGGER_WIFI_ENABLED
-extern struct m_wifi_context wifi_context;
-#endif
 
 struct main_ctx_s m_app_ctx = {
 #ifdef CONFIG_DISPLAY_ENABLED
@@ -101,7 +100,6 @@ struct main_ctx_s m_app_ctx = {
 .app_mode = APP_MODE_UNKNOWN,
 .cur_screen = CUR_SCREEN_NONE,
 .next_screen = CUR_SCREEN_NONE,
-.low_bat_countdown = 0,
 .record_done = 25,
 .button_down = false,
 .button_press_mode = -1,
@@ -123,9 +121,12 @@ struct main_ctx_s m_app_ctx = {
 #endif
 };
 
-#if (C_LOG_LEVEL < 2)
-const char * const app_mode_str[] = { APP_MODE_LIST(STRINGIFY) };
-const char * const cur_screen_str[] = { CUR_SCREEN_LIST(STRINGIFY) };
+#if (C_LOG_LEVEL < 3)
+static const char * const app_mode_str[] = { APP_MODE_LIST(STRINGIFY) };
+static const char * const cur_screen_str[] = { CUR_SCREEN_LIST(STRINGIFY) };
+#else
+static const char * const app_mode_str[] = { "APP_MODE_EVENT" };
+static const char * const cur_screen_str[] = { "CUR_SCREEN_EVENT" };
 #endif
 
 #if (defined(GPSSS))
@@ -146,191 +147,393 @@ static const char * const wakeup_reasons[] = {
     "ESP_SLEEP_WAKEUP_OTHER",
 };
 
-static void low_to_sleep(uint64_t sleep_time) {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __func__);
+#if defined(CONFIG_LOGGER_VFS_ENABLED)
+static void vfs_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data);
 #endif
-#if defined(CONFIG_DISPLAY_ENABLED)
-    lcd_deinit();
+#if defined(CONFIG_OTA_USE_AUTO_UPDATE)
+static void ota_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data);
 #endif
-#if defined(CONFIG_LOGGER_BUTTON_ENABLED)
-    deinit_button();
+static void logger_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data);
+static void logger_cfg_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data);
+#if defined(CONFIG_UBLOX_ENABLED)
+static void ubx_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data);
+#endif
+#if defined(CONFIG_GPS_LOG_ENABLED)
+static void gps_log_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data);
 #endif
 #if defined(CONFIG_LOGGER_ADC_ENABLED)
-    adc_deinit();
+static void adc_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data);
 #endif
-    events_deinit();
+#if defined(CONFIG_LOGGER_WIFI_ENABLED)
+static void wifi_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data);
+#endif
+#if defined(CONFIG_DISPLAY_ENABLED)
+static void ui_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data);
+#endif
+
+#if defined(CONFIG_LOGGER_WIFI_ENABLED)
+// WiFi mode change callbacks for coordinating external dependencies
+void wifi_before_mode_change_callback(void);
+void wifi_after_mode_change_callback(void);
+// ADC resume coordination
+static void schedule_delayed_adc_resume(void);
+#endif
+
+#define MAIN_LOOP_PERIOD_MS            ((uint32_t)MS_50)
+#if defined(CONFIG_ULP_COPROC_ENABLED) && defined(CONFIG_LOGGER_ADC_ENABLED)
+#define BATTERY_MONITOR_PERIOD_LOOPS   (50U)
+#else
+#define BATTERY_MONITOR_PERIOD_LOOPS   (10U)
+#endif
+#define INIT_DELAY_SHORT_MS            ((uint32_t)10)
+#define INIT_DELAY_MEDIUM_MS           ((uint32_t)20)
+
+typedef struct {
+    bool immediate_sleep;
+    uint64_t sleep_time;
+    bool enable_ext0;
+    uint8_t enable_ulp;
+} wakeup_plan_t;
+
+
+static void service_power_requests(void);
+static void ensure_app_ready(void);
+static bool run_periodic_diagnostics(uint32_t loop_counter);
+static void service_display(bool verbose, uint32_t now_ms);
+static void cleanup(void);
+
+#if defined CONFIG_LOGGER_ADC_ENABLED
+// ADC event suppression functions are now in adc.h
+#endif
+
+static bool s_event_loop_ready = false;
+
+// ADC event suppression is now handled by the adc module
+
+static esp_err_t register_event_handlers(void) {
+    esp_err_t first_err = ESP_OK;
+#define REGISTER_EVENT(base, handler)                                                             \
+    do {                                                                                          \
+        esp_err_t err = esp_event_handler_register((base), ESP_EVENT_ANY_ID, (handler), NULL);    \
+        if (err != ESP_OK) {                                                                      \
+            WLOG(TAG, "[%s] event reg fail %s/%s: %s", __func__, #base, #handler, esp_err_to_name(err)); \
+            if (first_err == ESP_OK) {                                                            \
+                first_err = err;                                                                  \
+            }                                                                                     \
+        }                                                                                         \
+    } while (0)
+
+#if defined(CONFIG_LOGGER_VFS_ENABLED)
+    REGISTER_EVENT(VFS_EVENT, vfs_event_handler);
+#endif
+#if defined(CONFIG_OTA_USE_AUTO_UPDATE) && defined(CONFIG_LOGGER_HTTP_ENABLED)
+    REGISTER_EVENT(OTA_AUTO_EVENT, ota_event_handler);
+#endif
+    REGISTER_EVENT(LOGGER_EVENT, logger_event_handler);
+    REGISTER_EVENT(LOGGER_CONFIG_EVENT, logger_cfg_event_handler);
+#if defined(CONFIG_UBLOX_ENABLED)
+    REGISTER_EVENT(UBX_EVENT, ubx_event_handler);
+#endif
+#if defined(CONFIG_GPS_LOG_ENABLED)
+    REGISTER_EVENT(GPS_LOG_EVENT, gps_log_event_handler);
+#endif
+#if defined(CONFIG_LOGGER_ADC_ENABLED)
+    REGISTER_EVENT(ADC_EVENT, adc_event_handler);
+#endif
+#if defined(CONFIG_LOGGER_WIFI_ENABLED)
+    REGISTER_EVENT(WIFI_EVENT, wifi_event_handler);
+    REGISTER_EVENT(IP_EVENT, wifi_event_handler);
+#endif
+#if defined(CONFIG_DISPLAY_ENABLED)
+    REGISTER_EVENT(UI_EVENT, ui_event_handler);
+#endif
+#undef REGISTER_EVENT
+    return first_err;
+}
+
+static void unregister_event_handlers(void) {
+#define UNREGISTER_EVENT(base, handler)                                                            \
+    do {                                                                                           \
+        esp_err_t err = esp_event_handler_unregister((base), ESP_EVENT_ANY_ID, (handler));         \
+        if (err != ESP_OK) {                                                                       \
+            WLOG(TAG, "[%s] event unreg fail %s/%s: %s", __func__, #base, #handler, esp_err_to_name(err)); \
+        }                                                                                          \
+    } while (0)
+
+#if defined(CONFIG_LOGGER_VFS_ENABLED)
+    UNREGISTER_EVENT(VFS_EVENT, vfs_event_handler);
+#endif
+#if defined(CONFIG_OTA_USE_AUTO_UPDATE) && defined(CONFIG_LOGGER_HTTP_ENABLED)
+    UNREGISTER_EVENT(OTA_AUTO_EVENT, ota_event_handler);
+#endif
+    UNREGISTER_EVENT(LOGGER_EVENT, logger_event_handler);
+    UNREGISTER_EVENT(LOGGER_CONFIG_EVENT, logger_cfg_event_handler);
+#if defined(CONFIG_UBLOX_ENABLED)
+    UNREGISTER_EVENT(UBX_EVENT, ubx_event_handler);
+#endif
+#if defined(CONFIG_GPS_LOG_ENABLED)
+    UNREGISTER_EVENT(GPS_LOG_EVENT, gps_log_event_handler);
+#endif
+#if defined(CONFIG_LOGGER_ADC_ENABLED)
+    UNREGISTER_EVENT(ADC_EVENT, adc_event_handler);
+#endif
+#if defined(CONFIG_LOGGER_WIFI_ENABLED)
+    UNREGISTER_EVENT(WIFI_EVENT, wifi_event_handler);
+    UNREGISTER_EVENT(IP_EVENT, wifi_event_handler);
+#endif
+#if defined(CONFIG_DISPLAY_ENABLED)
+    UNREGISTER_EVENT(UI_EVENT, ui_event_handler);
+#endif
+#undef UNREGISTER_EVENT
+}
+
+static void configure_sleep_wakeup_sources(uint64_t sleep_time, bool enable_ext0, bool enable_ulp) {
+    FUNC_ENTRY_ARGS(TAG, " sleep_time=%llu, ext0=%d, ulp=%d", sleep_time, enable_ext0, enable_ulp);
+
+    // Always disable all wakeup sources first to avoid conflicts
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+    
+    // Configure timer wakeup if specified
+    if (sleep_time > 0) {
+        esp_sleep_enable_timer_wakeup(SEC_TO_US(sleep_time));
+        FUNC_ENTRY_ARGS(TAG, "Enabled timer wakeup: %llu seconds", sleep_time);
+    }
+    esp_err_t ret = 0;
+    // Configure EXT0/EXT1 wakeup (button/reed switch)
+    // NOTE: When ULP button monitoring is enabled, EXT wakeup is disabled to avoid conflicts
+    if (enable_ext0) {
+#if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED) && defined(CONFIG_ULP_BUTTON_ENABLED)
+        // When ULP button monitoring is enabled, disable EXT wakeup - ULP handles button
+        if (enable_ulp) {
+            FUNC_ENTRY_ARGS(TAG, "ULP button monitoring enabled - skipping EXT wakeup for GPIO %d", WAKE_UP_GPIO);
+            // ret = esp_sleep_enable_ext1_wakeup((1ULL << WAKE_UP_GPIO), ESP_EXT1_WAKEUP_ANY_LOW);
+        } else {
+#endif
+            ret = esp_sleep_enable_ext0_wakeup(WAKE_UP_GPIO, 0);
+            if (ret == ESP_OK) {
+                FUNC_ENTRY_ARGS(TAG, "Enabled EXT0 wakeup on GPIO %d", WAKE_UP_GPIO);
+            } else {
+                FUNC_ENTRY_ARGS(TAG, "Failed to enable EXT0 wakeup: %s", esp_err_to_name(ret));
+            }
+#if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED) && defined(CONFIG_ULP_BUTTON_ENABLED)
+        }
+#endif
+    }
+    
+    // Configure ULP wakeup (battery monitoring and button monitoring)  
+#if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
+    if (enable_ulp) {
+        esp_err_t err = esp_sleep_enable_ulp_wakeup();
+        if (err != ESP_OK) {
+            ELOG(TAG, "Failed to enable ULP wakeup: %s", esp_err_to_name(err));
+        } else {
+#ifdef CONFIG_ULP_BUTTON_ENABLED
+            FUNC_ENTRY_ARGS(TAG, "Enabled ULP wakeup for battery and button monitoring");
+#else
+            FUNC_ENTRY_ARGS(TAG, "Enabled ULP wakeup for battery monitoring");
+#endif
+        }
+    }
+#endif
+    
+    // Log all enabled wakeup sources for debugging
+#if (C_LOG_LEVEL < 3)
+    FUNC_ENTRY_ARGS(TAG, "Sleep configured with wakeup sources: timer=%d, ext0=%d, ulp=%d", 
+             sleep_time > 0, enable_ext0, enable_ulp);
+#endif
+}
+
+static void low_to_sleep(uint64_t sleep_time, bool enable_ext0, uint8_t enable_ulp) {
+#if defined(CONFIG_LOGGER_ADC_ENABLED)
+#if defined(CONFIG_ULP_COPROC_ENABLED)
+    if(enable_ulp == 2) {
+        init_ulp_program();
+    }
+#endif
+#endif
     gpio_set_direction((gpio_num_t)13, (gpio_mode_t)GPIO_MODE_OUTPUT);
     gpio_set_level((gpio_num_t)13, 1);  // flash in deepsleep, CS stays HIGH!!
     gpio_deep_sleep_hold_en();
-    esp_sleep_enable_timer_wakeup(SEC_TO_US(sleep_time));
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s] getup logger to sleep for every %d seconds.", __func__, (int)sleep_time);
+
+#if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
+    // Enable ULP wakeup for battery monitoring if battery is low or critical
+    // enable_ulp = false;
+    if (m_context_rtc.RTC_voltage_bat < (MINIMUM_VOLTAGE + 0.2f)) {
+        ILOG(TAG, "Battery low (%.2fV), enabling ULP monitoring during sleep", 
+                 m_context_rtc.RTC_voltage_bat);
+    }
+    if(enable_ulp) {
+        start_ulp_program();
+ #if !CONFIG_IDF_TARGET_ESP32
+        /* RTC peripheral power domain needs to be kept on to keep SAR ADC related configs during sleep */
+        esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
 #endif
+    }
+#endif
+    
+    // Configure all wakeup sources in coordinated manner
+    configure_sleep_wakeup_sources(sleep_time, enable_ext0, enable_ulp);
+    
+    FUNC_ENTRY_ARGS(TAG, " sleep: %ds timer + EXT0 button + %s",
+         (int)sleep_time, enable_ulp ? "ULP battery monitoring" : "no ULP");
+    
     esp_deep_sleep(TO_M_UL(sleep_time));
 }
 
-static esp_timer_handle_t low_bat_timer = 0;
-#define LOW_BAT_SEQUENCE_TIME 20
-void low_bat_timer_cb(void *arg) {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __func__);
-#endif
-    if (low_bat_timer) {
-        esp_timer_stop(low_bat_timer);
-        if(esp_timer_delete(low_bat_timer)) {
-            ELOG(TAG, "[%s] esp_timer_delete failed", __FUNCTION__);
-        }
-        low_bat_timer = 0;
-    }
-    if(m_app_ctx.low_bat_countdown)
-        m_context.request_shutdown = 1;
-}
 
-void low_bat_start_sequence() {
+
+// Battery low callback - called by ADC module when low battery timer expires
+static void on_low_battery_shutdown(void) {
 #if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __func__);
+    WLOG(TAG, "[%s] low battery shutdown triggered by ADC module", __FUNCTION__);
 #endif
-    if(!m_app_ctx.low_bat_countdown) {
-        m_app_ctx.low_bat_countdown = 1;
-        const esp_timer_create_args_t low_bat_timer_args = {
-            .callback = &low_bat_timer_cb,
-            .name = "btn_tmr",
-            .arg = 0
-        };
-        if(!esp_timer_create(&low_bat_timer_args, &low_bat_timer)) {
-            if(esp_timer_start_once(low_bat_timer, TO_M_UL(LOW_BAT_SEQUENCE_TIME))) {
-                ELOG(TAG, "[%s] esp_timer_start_once failed", __FUNCTION__);
-            }
-         }
+    m_context.request_shutdown = 1;
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
-        if(!m_app_ctx.screen_auto_refresh && display_task_is_paused()) {
-            display_task_resume_for_times(1, -1, -1, false); // one partial refresh
-        }
-#endif
+    if(!m_app_ctx.screen_auto_refresh && display_task_is_paused()) {
+        display_task_resume_for_times(1, -1, -1, false); // one partial refresh
     }
+#endif
 }
 
-static void update_bat(void) {
-#if defined(CONFIG_LOGGER_ADC_ENABLED)
-    m_context_rtc.RTC_voltage_bat = volt_read();
-#endif
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s] computed:%.02f, required_min:%.02f\n", __FUNCTION__, m_context_rtc.RTC_voltage_bat, MINIMUM_VOLTAGE);
-#endif
-    if(m_context_rtc.RTC_voltage_bat < MINIMUM_VOLTAGE) {
-#if (C_LOG_LEVEL < 3)
-        WLOG(TAG, "[%s] low battery detected, start shutdown sequence: %.02f", __FUNCTION__, m_context_rtc.RTC_voltage_bat);
-#endif
-        low_bat_start_sequence();
-    }
-    else if(m_app_ctx.low_bat_countdown) {
-#if (C_LOG_LEVEL < 3)
-        WLOG(TAG, "[%s] battery level restored, cancel shutdown sequence: %.02f", __FUNCTION__, m_context_rtc.RTC_voltage_bat);
-#endif
-        m_app_ctx.low_bat_countdown = 0;
-    }
-}
+
 
 /*
 Method to print the reason by which ESP32 has been awaken from sleep
 */
 
-static int wakeup_init() {
-    ILOG(TAG, "[%s]", __func__);
-    int ret = 0;
-#if (C_LOG_LEVEL < 2)
-    DMEAS_START();
-#endif
+static wakeup_plan_t wakeup_init(void) {
+    FUNC_ENTRY(TAG);
+    wakeup_plan_t plan = {
+        .immediate_sleep = false,
+        .sleep_time = TIME_TO_SLEEP,
+        .enable_ext0 = true,
+        .enable_ulp = 0,
+    };
+
     esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
-
-    // First screen update call from wakeup
-    // if(wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) 
-    // screen_cb(&display);
-
-    if (m_context_rtc.RTC_voltage_bat < MINIMUM_VOLTAGE && wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) {
-        lowbat:
-        m_app_ctx.app_mode = APP_MODE_SLEEP;
-        esp_sleep_enable_ext0_wakeup(WAKE_UP_GPIO, 0);
-        low_to_sleep(TIME_TO_SLEEP);
-        goto done;
-    }
+    uint8_t start_ulp = 0;
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
 
     switch (wakeup_reason) {
         case ESP_SLEEP_WAKEUP_EXT0:
+        case ESP_SLEEP_WAKEUP_EXT1:
             ILOG(TAG, "%s", wakeup_reasons[wakeup_reason]);
             gpio_set_direction((gpio_num_t)WAKE_UP_GPIO, GPIO_MODE_INPUT);
             gpio_set_pull_mode((gpio_num_t)WAKE_UP_GPIO, GPIO_PULLUP_ONLY);
-            rtc_gpio_deinit(WAKE_UP_GPIO);  // was 39
+            rtc_gpio_deinit(WAKE_UP_GPIO);
             m_context.reed = 1;
-            esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-            /* ret += Boot_screen();
-            delay_ms(ret); */
-            break;
-#if (C_LOG_LEVEL < 3)
-        case ESP_SLEEP_WAKEUP_EXT1:
-            ILOG(TAG, "%s", wakeup_reasons[wakeup_reason]);
-            break;
+#if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
+            adc_ulp_clear_last_wake_reason();
 #endif
+            break;
         case ESP_SLEEP_WAKEUP_TIMER:
             ILOG(TAG, "%s", wakeup_reasons[wakeup_reason]);
-            // screen_cb(&display);
-            goto lowbat;
-            break;
-#if (C_LOG_LEVEL < 3)
-        case ESP_SLEEP_WAKEUP_TOUCHPAD:
-            ILOG(TAG, "%s", wakeup_reasons[wakeup_reason]);
+            start_ulp = 2;
+            plan.immediate_sleep = true;
             break;
         case ESP_SLEEP_WAKEUP_ULP:
-            ILOG(TAG, "%s", wakeup_reasons[wakeup_reason]);
-            break;
+#if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
+            {
+                ILOG(TAG, "%s - bat: %.2f", wakeup_reasons[wakeup_reason], m_context_rtc.RTC_voltage_bat);
+                
+                // Check if button long press detected
+                if (ulp_button_long_press_detected()) {
+                    ILOG(TAG, "ULP wakeup: Button long press detected");
+                    // m_app_ctx.button_press_mode = 2; // Long press
+                    // Wake up normally to handle button press
+                }
+                
+                // Check if ADC threshold triggered
+                else if (ulp_adc_threshold_triggered()) {
+                    adc_battery_state_t state = get_battery_state_from_ulp();
+                    uint32_t adc_reason = ulp_get_adc_wake_reason();
+                    ILOG(TAG, "ULP wakeup: ADC threshold (reason=%lu, state=%d)", adc_reason, state);
+                    debug_ulp_status();
+                    
+                    switch (state) {
+                        case ADC_BATTERY_LOW:
+                        case ADC_BATTERY_CRITICAL_LOW:
+                            WLOG(TAG, "ULP wakeup: Battery critical low");
+                            plan.immediate_sleep = true;
+                            break;
+                        case ADC_BATTERY_CHARGING_STARTED:
+                            ILOG(TAG, "ULP wakeup: Charging started");
+                            m_app_ctx.app_mode = APP_MODE_CHARGE;
+                            // ADC module manages both charge_state and charging_is_on
+                            adc_sync_initial_charging_state(1);
+                            break;
+                        case ADC_BATTERY_CHARGING_STOPPED:
+                            ILOG(TAG, "ULP wakeup: Charging stopped");
+                            plan.immediate_sleep = true;
+                            // ADC module manages both charge_state and charging_is_on
+                            adc_sync_initial_charging_state(0);
+                            break;
+                        default:
+                            break;
+                    }
+                }
+                
+                // Clear wake sources after processing
+                ulp_clear_wake_sources();
+                
+                // If ULP button monitoring was enabled, deinitialize button GPIO from RTC mode
+                // so logger_button module can configure it for normal GPIO use
+#ifdef CONFIG_ULP_BUTTON_ENABLED
+                ILOG(TAG, "Deinitializing button GPIO%d from RTC mode for normal GPIO use", CONFIG_ULP_BUTTON_GPIO);
+                rtc_gpio_deinit(CONFIG_ULP_BUTTON_GPIO);
+                // Set button context flag if it was a button wake
+                if (ulp_button_long_press_detected()) {
+                    m_context.reed = 1;  // Set button press flag for compatibility
+                }
 #endif
+            }
+#else
+            ILOG(TAG, "%s", wakeup_reasons[wakeup_reason]);
+#endif
+            start_ulp = 2;
+            break;
         default:
             ILOG(TAG, "%s int: %d", wakeup_reasons[7], wakeup_reason);
-            /* ret += Boot_screen();
-            delay_ms(ret); */
+#if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
+        adc_ulp_clear_last_wake_reason();
+#endif
             break;
     }
-    done:
-#if (C_LOG_LEVEL < 2)
-    DMEAS_END(TAG, "[%s] took %llu us", __FUNCTION__);
-#endif
-    return ret;
+
+    if (plan.immediate_sleep) {
+        if (m_context_rtc.RTC_voltage_bat < MINIMUM_VOLTAGE) {
+            WLOG(TAG, "Battery critically low (%.2fV), going back to sleep with monitoring", m_context_rtc.RTC_voltage_bat);
+        }
+        m_app_ctx.app_mode = APP_MODE_SLEEP;
+        plan.enable_ulp = start_ulp;
+    }
+
+    return plan;
 }
 
-static void do_restart() {
-    ILOG(TAG, "[%s]", __func__);
-    esp_restart();
-}
-
-static void go_to_sleep(uint64_t sleep_time) {
-    ILOG(TAG, "[%s]", __func__);
-#if defined(CONFIG_LOGGER_WIFI_ENABLED)
-    if (wifi_status() > 0) {
-        wifi_uninit();
+static void go_to_sleep_or_restart(wakeup_plan_t plan) {
+    FUNC_ENTRY(TAG);
+#if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
+    if(!get_adc_charging_state()) {
+        display_wait_for_task();
     }
 #endif
-#if defined(CONFIG_DISPLAY_ENABLED)
-    display_wait_for_task();
+    cleanup();
+    if(m_app_ctx.app_mode == APP_MODE_CHARGE) {
+#if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
+        if(!m_app_ctx.screen_auto_refresh && display_task_is_paused()) {
+            display_task_resume_for_times(1, -1, -1, false);
+        }
 #endif
-    // write_rtc(&m_context_rtc);
-    vfs_deinit();
-    if(sleep_time > 0) {
-        low_to_sleep(sleep_time);
+        return;
+    }
+    if(plan.sleep_time > 0) {
+        ILOG(TAG, "[%s] sleep", __func__);
+        low_to_sleep(plan.sleep_time, plan.enable_ext0, plan.enable_ulp);
     } else {
-        do_restart(0);
+        ILOG(TAG, "[%s] restart", __func__);
+        esp_restart();
     }
-}
-
-static int shut_down_gps(int no_sleep) {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __func__);
-#endif
-    int ret = gps_shut_down();
-    if (!no_sleep) {
-        go_to_sleep(3);  // got to sleep after 5 s, this to prevent booting when GPIO39 is still low !
-    }
-    return ret;
 }
 
 #if defined(CONFIG_LOGGER_USE_WDT)
@@ -375,12 +578,12 @@ static void wdt_user_task() {
     if ((wdt_task0_duration > task_timeout) && (m_context.downloading_file)) {
         feedTheDog_Task0();
         wdt_task0 = millis;
-        ESP_LOGW(TAG, "Extend watchdog_timeout due long download");
+        WLOG(TAG, "Extend watchdog_timeout due long download");
     }
     if ((wdt_task0_duration > task_timeout) && (!m_context.downloading_file))
-        ESP_LOGW(TAG, "Watchdog task0 triggered");
+        WLOG(TAG, "Watchdog task0 triggered");
     if (wdt_task1_duration > task_timeout)
-        ESP_LOGW(TAG, "Watchdog task1 triggered");
+        WLOG(TAG, "Watchdog task1 triggered");
 }
 
 #if !CONFIG_ESP_TASK_WDT_INIT
@@ -393,7 +596,7 @@ static void wdt_task(void *arg) {
     esp_task_wdt_add_user("feedTheDog_Task0", &func_a_twdt_user_hdl);
     esp_task_wdt_add_user("feedTheDog_Task1", &func_b_twdt_user_hdl);
 
-    ESP_LOGI(TAG, "Subscribed to TWDT");
+    ILOG(TAG, "Subscribed to TWDT");
     // int timeout = WDT_TIMEOUT;
     while (run_wdt_loop) {
         esp_task_wdt_reset();
@@ -406,7 +609,7 @@ static void wdt_task(void *arg) {
     esp_task_wdt_delete_user(func_b_twdt_user_hdl);
     esp_task_wdt_delete(NULL);
 
-    ESP_LOGI(TAG, "Unsubscribed from TWDT");
+    ILOG(TAG, "Unsubscribed from TWDT");
 
     // Notify main task of deletion
     xTaskNotifyGive((TaskHandle_t)arg);
@@ -422,8 +625,8 @@ static void init_watchdog() {
             .trigger_panic = false,
    };
     esp_task_wdt_init(&twdt_config);
-    ESP_LOGI(TAG, "TWDT initialized");
-    ESP_LOGI(TAG, "Create TWDT task");
+    ILOG(TAG, "TWDT initialized");
+    ILOG(TAG, "Create TWDT task");
     run_wdt_loop = true;
     xTaskCreatePinnedToCore(wdt_task, "wdt_task", 4 * 1024,
                             xTaskGetCurrentTaskHandle(), 10, NULL, 0);
@@ -433,40 +636,318 @@ static void init_watchdog() {
 
 #if defined(CONFIG_LOGGER_WIFI_ENABLED)
 void wifi_sta_conf_sync() {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     for(uint8_t i=0, j=5; i<j; ++i) {
         if(i>0 && !m_app_ctx.config->wifi_sta[i].ssid[0]) break;
         if (strcmp(wifi_context.stas[i].ssid, m_app_ctx.config->wifi_sta[i].ssid)) {
-            strcpy(wifi_context.stas[i].ssid, m_app_ctx.config->wifi_sta[i].ssid);
-            strcpy(wifi_context.stas[i].password, m_app_ctx.config->wifi_sta[i].password);
+            strncpy(wifi_context.stas[i].ssid, m_app_ctx.config->wifi_sta[i].ssid, sizeof(wifi_context.stas[i].ssid) - 1);
+            wifi_context.stas[i].ssid[sizeof(wifi_context.stas[i].ssid) - 1] = '\0';
+            strncpy(wifi_context.stas[i].password, m_app_ctx.config->wifi_sta[i].password, sizeof(wifi_context.stas[i].password) - 1);
+            wifi_context.stas[i].password[sizeof(wifi_context.stas[i].password) - 1] = '\0';
         }
     }
     wifi_context.offset = c_gps_cfg.timezone;
 }
 
+// Utility function to check WiFi readiness using event group bits
+static bool wifi_is_ready_for_operation(void) {
+    if (!wifi_context.s_wifi_event_group || !wifi_context.s_wifi_initialized) {
+        return false;
+    }
+    
+    EventBits_t bits = xEventGroupGetBits(wifi_context.s_wifi_event_group);
+    
+#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(ENABLE_WIFI_AP_STA)
+    // Check current WiFi mode to determine readiness criteria
+    wifi_mode_t current_mode = WIFI_MODE_NULL;
+    esp_err_t err = esp_wifi_get_mode(&current_mode);
+    if (err != ESP_OK) {
+        return false;
+    }
+    
+    bool ap_ready = (bits & WIFI_AP_READY_BIT) != 0;
+    bool sta_connected_with_ip = (bits & WIFI_CONNECTED_BIT) != 0;
+    
+    switch (current_mode) {
+        case WIFI_MODE_AP:
+            // AP-only mode: ready when AP is operational (voltage stable)
+            return ap_ready;
+        case WIFI_MODE_STA:
+            // STA-only mode: ready when connected with IP (voltage stable after AP→STA transition)
+            return sta_connected_with_ip;
+        case WIFI_MODE_APSTA:
+            // APSTA mode: ready when AP is up (STA connection optional, no voltage impact)
+            return ap_ready;
+        default:
+            return false;
+    }
+#else
+    // For AP-only mode, just need AP ready
+    return (bits & WIFI_AP_READY_BIT) != 0;
+#endif
+}
+
+// Utility function to check if time is synchronized
+static bool wifi_time_is_synchronized(void) {
+    if (!wifi_context.s_wifi_event_group) {
+        return false;
+    }
+    
+    EventBits_t bits = xEventGroupGetBits(wifi_context.s_wifi_event_group);
+    return (bits & WIFI_TIME_SYNC_BIT) != 0;
+}
+
+static void wifi_deinit(void) {
+    FUNC_ENTRY(TAG);
+        wifi_uninit();
+}
+
+#if defined(CONFIG_LOGGER_WIFI_ENABLED)
+// WiFi mode change callback implementations
+void wifi_before_mode_change_callback(void) {
+#if (C_LOG_LEVEL < 2)
+    ILOG(TAG, "[%s] WiFi mode change starting - suppressing ADC events & syncing config", __func__);
+#endif
+#if defined CONFIG_LOGGER_ADC_ENABLED
+    adc_suppress_events("WiFi mode change");
+#endif
+#if defined(CONFIG_LOGGER_WIFI_ENABLED)
+    wifi_sta_conf_sync();  // Sync WiFi station configuration before mode change
+#endif
+}
+
+void wifi_after_mode_change_callback(void) {
+    FUNC_ENTRY_ARGS(TAG, "WiFi mode change complete");
+#if defined CONFIG_LOGGER_ADC_ENABLED
+    // Check what type of mode change occurred
+    wifi_mode_t current_mode = WIFI_MODE_NULL;
+    esp_err_t err = esp_wifi_get_mode(&current_mode);
+    
+    if (err == ESP_OK) {
+        switch (current_mode) {
+            case WIFI_MODE_AP:
+                // AP-only mode is stable immediately
+                ILOG(TAG, "AP-only mode stable - resuming ADC events immediately");
+                adc_resume_events("WiFi AP mode stable");
+                break;
+            case WIFI_MODE_STA:
+                // AP→STA transition: need to wait for connection (voltage will stabilize)
+                ILOG(TAG, "AP→STA transition - ADC will resume when STA connects");
+                // ADC resume handled by STA_GOT_IP event
+                break;
+            case WIFI_MODE_APSTA:
+                // APSTA mode is stable immediately (no voltage change expected)
+                ILOG(TAG, "APSTA mode stable - resuming ADC events immediately");
+                adc_resume_events("WiFi APSTA mode stable");
+                break;
+            default:
+                ILOG(TAG, "Unknown WiFi mode - resuming ADC events with delay");
+                schedule_delayed_adc_resume();
+                break;
+        }
+    } else {
+        WLOG(TAG, "Failed to get WiFi mode - using delayed ADC resume");
+        schedule_delayed_adc_resume();
+    }
+#endif
+#if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
+    if(!m_app_ctx.screen_auto_refresh && display_task_is_paused()){
+        display_task_resume_for_times(1, -1, -1, false);
+    }
+#endif
+}
+#endif // CONFIG_LOGGER_WIFI_ENABLED
+
+static bool wifi_callbacks_registered = false;
+
+// ADC resume coordination with WiFi stability
+static bool adc_resume_pending = false;
+static esp_timer_handle_t adc_resume_timer = NULL;
+
+static void adc_resume_timer_callback(void* arg) {
+    // Check if WiFi is truly stable for ADC operation
+    if (wifi_is_ready_for_operation()) {
+        // Additional check: ensure we're not in the middle of a connection attempt
+        wifi_mode_t current_mode = WIFI_MODE_NULL;
+        esp_err_t err = esp_wifi_get_mode(&current_mode);
+        
+        bool safe_to_resume = true;
+        if (err == ESP_OK && (current_mode == WIFI_MODE_STA || current_mode == WIFI_MODE_APSTA)) {
+            // For STA modes, ensure we have stable connection (WIFI_CONNECTED_BIT means STA connected and has IP)
+            EventBits_t bits = xEventGroupGetBits(wifi_context.s_wifi_event_group);
+            bool sta_connected_with_ip = (bits & WIFI_CONNECTED_BIT) != 0;
+            if (!sta_connected_with_ip) {
+                safe_to_resume = false;
+                WLOG(TAG, "STA mode without IP - delaying ADC resume for voltage stability");
+            }
+        }
+        
+        if (safe_to_resume) {
+            ILOG(TAG, "WiFi stabilized - resuming ADC events after mode change");
+            adc_resume_events("WiFi stabilized after mode change");
+            adc_resume_pending = false;
+            
+            // Clean up timer
+            if (adc_resume_timer) {
+                esp_timer_delete(adc_resume_timer);
+                adc_resume_timer = NULL;
+            }
+        } else {
+            WLOG(TAG, "WiFi ready but not voltage-stable - will retry ADC resume in 500ms");
+        }
+    } else {
+        WLOG(TAG, "WiFi not yet stable - will retry ADC resume in 500ms");
+        // Timer will fire again automatically
+    }
+}
+
+static void schedule_delayed_adc_resume(void) {
+    if (adc_resume_timer) {
+        esp_timer_stop(adc_resume_timer);
+        esp_timer_delete(adc_resume_timer);
+        adc_resume_timer = NULL;
+    }
+    
+    esp_timer_create_args_t timer_config = {
+        .callback = adc_resume_timer_callback,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "adc_resume_timer"
+    };
+    
+    esp_err_t err = esp_timer_create(&timer_config, &adc_resume_timer);
+    if (err == ESP_OK) {
+        adc_resume_pending = true;
+        ILOG(TAG, "Scheduling delayed ADC resume - waiting for WiFi stability");
+        esp_timer_start_periodic(adc_resume_timer, 500000); // Check every 500ms
+    } else {
+        ELOG(TAG, "Failed to create ADC resume timer: %s", esp_err_to_name(err));
+        // Fallback to immediate resume
+        adc_resume_events("WiFi mode change complete (timer failed)");
+    }
+}
+
+void wifi_ensure_callbacks_registered(void) {
+    #if defined(CONFIG_LOGGER_WIFI_ENABLED)
+    // Set up WiFi mode change callbacks for external dependencies
+    if (wifi_callbacks_registered) return;
+    wifi_set_mode_change_callbacks(&(wifi_mode_change_callbacks_t){
+        .before_mode_change = wifi_before_mode_change_callback,
+        .after_mode_change_complete = wifi_after_mode_change_callback
+    });
+    wifi_callbacks_registered = true;
+#endif
+}
+
+// WiFi mode change handling moved to WiFi module (wifi_request_mode_change)
+// Callbacks for external dependencies are set up in setup()
+
+/**
+ * App mode context functions for ADC module
+ * These allow the ADC module to make intelligent decisions about charge state management
+ */
+#if defined(CONFIG_LOGGER_ADC_ENABLED)
+
+// Get current app mode for ADC charge state logic
+app_mode_t get_current_app_mode(void) {
+    return m_app_ctx.app_mode;
+}
+
+// Get current charging state for ADC consistency checks
+bool get_current_charging_state(void) {
+    return get_adc_charging_state();
+}
+
+// Check if app is in a state where charge events should be filtered
+bool should_filter_charge_events(void) {
+    // Filter charge events during boot - system not fully initialized
+    if (m_app_ctx.app_mode == APP_MODE_BOOT) {
+        return true;
+    }
+    
+    // Filter charge events during shutdown/restart - system shutting down
+    if (m_app_ctx.app_mode == APP_MODE_SHUT_DOWN || m_app_ctx.app_mode == APP_MODE_RESTART) {
+        return true;
+    }
+    
+    // No filtering needed for other modes
+    return false;
+}
+
+#endif // CONFIG_LOGGER_ADC_ENABLED
+
 void app_mode_wifi_handler(int verbose) {
     if (m_app_ctx.app_mode_wifi_on) return;
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __func__);
-#endif
+    FUNC_ENTRY(TAG);
     m_app_ctx.app_mode = APP_MODE_WIFI;
     m_app_ctx.app_mode_wifi_on = 1;
-    shut_down_gps(1);
+    
+#if defined CONFIG_LOGGER_ADC_ENABLED
+    // Suppress ADC events during WiFi transition to prevent false charge detection
+    adc_suppress_events("WiFi initialization");
+#endif
+    
+    gps_shut_down();  // save gps
+    
     if (!wifi_context.s_wifi_initialized) {
 #if (C_LOG_LEVEL < 2)
         ILOG(TAG, "[%s] first turn wifi on", __FUNCTION__);
 #endif
-        wifi_sta_conf_sync();
+        wifi_ensure_callbacks_registered();
         wifi_init();
 #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(ENABLE_WIFI_AP_STA)
         wifi_mode(1, 1);
 #else
         wifi_mode(0, 1);
+        
 #endif
-#if (C_LOG_LEVEL < 2)
-        ILOG(TAG, "[%s] wifi started.", __FUNCTION__);
+        // Wait for AP to be ready with timeout
+        if (wifi_wait_for_ap_ready(10000) == 0) {
+            ILOG(TAG, "[%s] AP ready and operational", __FUNCTION__);
+        } else {
+            WLOG(TAG, "[%s] AP startup timeout, continuing anyway", __FUNCTION__);
+        }
+#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(ENABLE_WIFI_AP_STA)                
+        // Attempt STA connection with timeout (non-blocking)
+        if (wifi_wait_for_connection(15000) == 0) {
+            ILOG(TAG, "[%s] STA connected successfully", __FUNCTION__);
+            
+            // Wait for time synchronization with timeout
+            if (wifi_wait_for_time_sync(30000) == 0) {
+                ILOG(TAG, "[%s] Time synchronized via SNTP", __FUNCTION__);
+            } else {
+                WLOG(TAG, "[%s] Time sync timeout, continuing without NTP", __FUNCTION__);
+            }
+        } else {
+            ILOG(TAG, "[%s] STA connection timeout, AP-only mode", __FUNCTION__);
+        }
+#endif
+        
+#if defined CONFIG_LOGGER_ADC_ENABLED
+        // Resume ADC events after WiFi initialization is complete
+        adc_resume_events("WiFi initialization complete");
+#endif
+
+        DLOG(TAG, "[%s] wifi started.", __FUNCTION__);
+    } else {
+        // WiFi already initialized, just ensure we're in the right mode
+#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(ENABLE_WIFI_AP_STA)
+        // Check WiFi and time sync status using utility functions
+        if (!wifi_is_ready_for_operation()) {
+            ILOG(TAG, "[%s] WiFi not fully operational, waiting for connection...", __FUNCTION__);
+            if (wifi_wait_for_connection(10000) == 0) {
+                ILOG(TAG, "[%s] STA reconnected successfully", __FUNCTION__);
+            }
+        }
+        if (!wifi_time_is_synchronized()) {
+            ILOG(TAG, "[%s] Time not synchronized, waiting...", __FUNCTION__);
+            if (wifi_wait_for_time_sync(15000) == 0) {
+                ILOG(TAG, "[%s] Time resynchronized via SNTP", __FUNCTION__);
+            }
+        }
 #endif
     }
+    
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
     if(!m_app_ctx.screen_auto_refresh && display_task_is_paused()){
         display_task_resume_for_times(1, -1, -1, false);
@@ -481,22 +962,44 @@ void app_mode_gps_handler(int verbose) {
     DMEAS_START();
 #endif
     m_app_ctx.app_mode = APP_MODE_GPS;
-#if defined(CONFIG_LOGGER_WIFI_ENABLED)
-    if (wifi_context.s_wifi_initialized) {
-        wifi_uninit();
-        m_context.NTP_time_set = 0;
+    
+#if defined CONFIG_LOGGER_ADC_ENABLED
+    // Suppress ADC events during WiFi shutdown to prevent false charge detection
+    adc_suppress_events("WiFi shutdown");
+    
+    // Clean up any pending ADC resume timer since we're shutting down WiFi
+    if (adc_resume_timer) {
+        ILOG(TAG, "Cleaning up pending ADC resume timer for GPS mode");
+        esp_timer_stop(adc_resume_timer);
+        esp_timer_delete(adc_resume_timer);
+        adc_resume_timer = NULL;
+        adc_resume_pending = false;
     }
 #endif
-    if(m_app_ctx.config_initialized) {
-        m_app_ctx.app_mode_gps_on = 1;
-#if (defined(CONFIG_UBLOX_ENABLED) && defined(CONFIG_GPS_LOG_ENABLED))
-        gps_task_start();
+    
+#if defined(CONFIG_LOGGER_WIFI_ENABLED)
+    wifi_deinit();
+    
+    // CRITICAL: Prepare memory for GPS operation after WiFi cleanup
+    // GPS requires maximum available memory for proper operation
+    wifi_prepare_memory_for_gps();
 #endif
+    if(m_app_ctx.config_initialized) {
+#if (defined(CONFIG_UBLOX_ENABLED) && defined(CONFIG_GPS_LOG_ENABLED))
+        gps_start();
+#endif
+        m_app_ctx.app_mode_gps_on = 1;
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
         if(!m_app_ctx.screen_auto_refresh){
             display_task_resume_for_times(1, -1, -1, false);
         }
 #endif
+        
+#if defined CONFIG_LOGGER_ADC_ENABLED
+        // Resume ADC events after GPS mode setup is complete
+        adc_resume_events("GPS mode setup complete");
+#endif
+
 #if (C_LOG_LEVEL < 2)
         DMEAS_END(TAG, "[%s] took %llu us", __FUNCTION__);
 #endif
@@ -509,18 +1012,19 @@ void task_app_mode_handler(int verbose) {
         case APP_MODE_SHUT_DOWN:
             m_app_ctx.app_mode_wifi_on = 0;
             m_app_ctx.app_mode_gps_on = 0;
-            
+            ILOG(TAG, "[%s] mode: %s", __FUNCTION__, app_mode_str[m_app_ctx.app_mode]);
+            gps_shut_down();  // save gps
             if (m_app_ctx.app_mode == APP_MODE_SHUT_DOWN) {
-                shut_down_gps(0);  // save gps
+                // go to sleep after 3 s, this to prevent booting when GPIO39 is still low !
+                go_to_sleep_or_restart((wakeup_plan_t){1, 3, false, false });
             } else {
-                shut_down_gps(1);  // save gps
-                go_to_sleep(0);
+                // immediate restart
+                go_to_sleep_or_restart((wakeup_plan_t){1, 0, false, false });  // restart
             }
             break;
         case APP_MODE_WIFI:
 #if defined(CONFIG_LOGGER_WIFI_ENABLED)
             m_app_ctx.app_mode_gps_on = 0;
-            // next_screen = CUR_SCREEN_NONE;
             app_mode_wifi_handler(verbose);
             break;
 #endif
@@ -536,12 +1040,14 @@ void task_app_mode_handler(int verbose) {
 
 #if defined(CONFIG_DISPLAY_PWR)
 void init_power() {
+    FUNC_ENTRY(TAG);
     gpio_set_direction((gpio_num_t)CONFIG_DISPLAY_PWR, GPIO_MODE_OUTPUT);
     gpio_set_level(CONFIG_DISPLAY_PWR, 1);
 }
 #endif    
 
 static void gps_save_rtc() {
+    FUNC_ENTRY(TAG);
     m_context_rtc.RTC_distance = avail_fields[fld_distance].value.num();
     m_context_rtc.RTC_alp = avail_fields[fld_a500_display_max].value.num();
     m_context_rtc.RTC_500m = avail_fields[fld_m500_display_max].value.num();
@@ -630,7 +1136,7 @@ static void ota_event_handler(void *handler_args, esp_event_base_t base, int32_t
                 }
                 break;
             case OTA_AUTO_EVENT_UPDATE_FAILED:
-                ILOG(TAG, "[%s] ota %s", __FUNCTION__, id < 4 ? ota_auto_event_strings[id] : c);
+               ILOG(TAG, "[%s] ota %s", __FUNCTION__, id < 4 ? ota_auto_event_strings[id] : c);
                 goto refresh;
                 break;
             case OTA_AUTO_EVENT_UPDATE_START:
@@ -657,9 +1163,7 @@ static void logger_event_handler(void *handler_args, esp_event_base_t base, int3
     if(base == LOGGER_EVENT) {
         switch(id) {
             case LOGGER_EVENT_DATETIME_SET:
-#if (C_LOG_LEVEL < 3)
                 ILOG(TAG, "[%s] l %s", __FUNCTION__, logger_event_strings(id));
-#endif
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
                 if(no_auto_refresh && display_task_is_paused()){
                     display_task_resume_for_times(1, -1, -1, false);
@@ -676,36 +1180,24 @@ static void logger_cfg_event_handler(void *handler_args, esp_event_base_t base, 
     if(base == LOGGER_CONFIG_EVENT) {
         switch(id) {
             case LOGGER_CONFIG_EVENT_CFG_CHANGED:
-#if (C_LOG_LEVEL < 3)
                 ILOG(TAG, "[%s] g %s d %hhu", __FUNCTION__, logger_config_event_strings[id], *((uint8_t*)event_data));
-#endif
                 break;
             case LOGGER_CONFIG_EVENT_CFG_SET:
-#if (C_LOG_LEVEL < 3)
                 ILOG(TAG, "[%s] g %s d %hhu", __FUNCTION__, logger_config_event_strings[id], *((uint8_t*)event_data));
-#endif
                 config_save_json(m_app_ctx.config);
                 break;
 #if (C_LOG_LEVEL < 3)
             case LOGGER_CONFIG_EVENT_CFG_GET:
-#if (C_LOG_LEVEL < 3)
                 ILOG(TAG, "[%s] c %s", __FUNCTION__, logger_config_event_strings[id]);
-#endif
                 break;
             case LOGGER_CONFIG_EVENT_INIT_DONE:
-#if (C_LOG_LEVEL < 3)
                 ILOG(TAG, "[%s] c %s", __FUNCTION__, logger_config_event_strings[id]);
-#endif
                 break;
             case LOGGER_CONFIG_EVENT_SAVE_DONE:
-#if (C_LOG_LEVEL < 3)
                 ILOG(TAG, "[%s] c %s", __FUNCTION__, logger_config_event_strings[id]);
-#endif
                 break;
             case LOGGER_CONFIG_EVENT_SAVE_FAIL:
-#if (C_LOG_LEVEL < 3)
                 ILOG(TAG, "[%s] c %s", __FUNCTION__, logger_config_event_strings[id]);
-#endif
                 break;
 #endif
             default:
@@ -732,9 +1224,7 @@ static void ubx_event_handler(void *handler_args, esp_event_base_t base, int32_t
             case UBX_EVENT_SETUP_DONE:
             case UBX_EVENT_SETUP_FAIL:
                 refresh:
-#if (C_LOG_LEVEL < 3)
                 ILOG(TAG, "[%s] u %s", __FUNCTION__, ubx_event_strings(id));
-#endif
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
                 if(no_auto_refresh && display_task_is_paused()){
                     display_task_resume_for_times(1, -1, -1, false);
@@ -793,13 +1283,19 @@ static void gps_log_event_handler(void *handler_args, esp_event_base_t base, int
 #endif
                 break;
             case GPS_LOG_EVENT_LOG_FILES_SAVED:
+#if (C_LOG_LEVEL < 3)
                 ILOG(TAG, "[%s] g %s", __FUNCTION__, gps_log_event_strings(id));
+#endif
                 break;
             case GPS_LOG_EVENT_LOG_FILES_CLOSED:
+#if (C_LOG_LEVEL < 3)
                 ILOG(TAG, "[%s] g %s", __FUNCTION__, gps_log_event_strings(id));
+#endif
                 break;
             case GPS_LOG_EVENT_GPS_SAVE_FILES:
+#if (C_LOG_LEVEL < 3)
                 ILOG(TAG, "[%s] g %s", __FUNCTION__, gps_log_event_strings(id));
+#endif
                 m_app_ctx.next_screen = CUR_SCREEN_SAVE_SESSION;
                 gps_save_rtc();
                 break;
@@ -852,7 +1348,7 @@ static void gps_log_event_handler(void *handler_args, esp_event_base_t base, int
 #if (C_LOG_LEVEL < 3)
                 ILOG(TAG, "[%s] g %s", __FUNCTION__, gps_log_event_strings(id));
 #endif
-#if defined(CONFIG_DISPLAY_ENABLED)
+#if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
                 display_cancel_delay();
 #endif
                 break;
@@ -885,32 +1381,77 @@ static void gps_log_event_handler(void *handler_args, esp_event_base_t base, int
 static void adc_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data) {
     uint8_t no_auto_refresh = m_app_ctx.config ? !m_app_ctx.screen_auto_refresh : 0;
     if(base == ADC_EVENT) {
+        // Check if ADC events should be suppressed during WiFi/GPS transitions
+        if (adc_should_suppress_event(id)) {
+            return;  // Silently ignore the event
+        }
         switch(id) {
             case ADC_EVENT_UPDATE:
-                //ILOG(TAG, "[%s] %s", __FUNCTION__, adc_event_strings(id));
+                // Update RTC voltage from ADC module event data - no display refresh needed for voltage updates
+                if (event_data) {
+                    float voltage = *(float*)event_data;
+                    m_context_rtc.RTC_voltage_bat = voltage;
+#if (C_LOG_LEVEL < 4)
+                    DLOG(TAG, "[%s] ADC voltage updated to %.2fV", __FUNCTION__, voltage);
+#endif
+                }
                 break;
             case ADC_EVENT_BATTERY_LOW:
             case ADC_EVENT_BATTERY_CRITICAL:
-                ILOG(TAG, "[%s] a %s", __FUNCTION__, adc_event_strings(id));
+#if (C_LOG_LEVEL < 3)
+                ILOG(TAG, "[%s] %s", __FUNCTION__, adc_event_strings(id));
+#endif          
+                // ADC module manages charge_state - no need to duplicate in main
+                goto refresh;
+                break;
+            case ADC_EVENT_BATTERY_HIGH:
+#if (C_LOG_LEVEL < 3)
+                ILOG(TAG, "[%s] %s, no action", __FUNCTION__, adc_event_strings(id));
+#endif          
+                // ADC module manages charge_state - no need to duplicate in main
+                break;
+            case ADC_EVENT_BATTERY_OK:
+#if (C_LOG_LEVEL < 3)
+                ILOG(TAG, "[%s] %s", __FUNCTION__, adc_event_strings(id));
+#endif          
+                // Battery is back to normal - ADC module manages state, just refresh display
+                adc_battery_state_t current_state = get_adc_state();
+                if (current_state == ADC_BATTERY_NORMAL) {
+                    goto refresh;
+                }
+                break;
+            case ADC_EVENT_CHARGE_STARTED:
+#if (C_LOG_LEVEL < 3)
+                ILOG(TAG, "[%s] %s", __FUNCTION__, adc_event_strings(id));
+#endif          
+                if(m_app_ctx.app_mode == APP_MODE_BOOT) break;
+                // ADC module now manages charging_is_on flag internally
+                // ADC module manages charge_state - no need to duplicate in main
+                // No automatic app mode switching - only update charging state
+                goto refresh;
+                break;
+            case ADC_EVENT_CHARGE_STOPPED:
+#if (C_LOG_LEVEL < 3)
+                ILOG(TAG, "[%s] %s", __FUNCTION__, adc_event_strings(id));
+#endif
+                if(m_app_ctx.app_mode == APP_MODE_BOOT) break;
+                // ADC module now manages charging_is_on flag internally
+                // ADC module manages charge_state - no need to duplicate in main
+                if (m_app_ctx.app_mode == APP_MODE_CHARGE) {
+                    m_context.request_shutdown = 1;
+                } else {
+                    goto refresh;
+                }
+                break;
+            refresh:
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
                 if(no_auto_refresh && display_task_is_paused()){
-                    display_task_resume_for_times(1, -1, -1, false);
+                    display_task_resume_for_times(3, -1, -1, false);
                 }
 #endif
                 break;
-#if (C_LOG_LEVEL < 3)
-            case ADC_EVENT_BATTERY_OK:
-                ILOG(TAG, "[%s] a %s", __FUNCTION__, adc_event_strings(id));
-                break;
-            case ADC_EVENT_CHARGE_STARTED:
-                ILOG(TAG, "[%s] a %s", __FUNCTION__, adc_event_strings(id));
-                break;
-            case ADC_EVENT_CHARGE_STOPPED:
-                ILOG(TAG, "[%s] a %s", __FUNCTION__, adc_event_strings(id));
-                break;
-#endif
             default:
-                // ILOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+                ILOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
                 break;
         }
     }
@@ -920,10 +1461,51 @@ static void adc_event_handler(void *handler_args, esp_event_base_t base, int32_t
 #if defined CONFIG_LOGGER_WIFI_ENABLED
 static void wifi_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data) {
     uint8_t no_auto_refresh = m_app_ctx.config ? !m_app_ctx.screen_auto_refresh : 0;
+    
     if(base == WIFI_EVENT) {
         switch(id) {
             case WIFI_EVENT_AP_START:
+                // Check WiFi operational status using utility function
+                if (wifi_is_ready_for_operation()) {
+                    ILOG(TAG, "[%s] WiFi fully operational", __FUNCTION__);
+                } else {
+                    ILOG(TAG, "[%s] AP started but not yet ready", __FUNCTION__);
+                }
+                // ADC event resumption is now handled by WiFi module for unified flow
+                goto refresh;
+                break;
             case WIFI_EVENT_AP_STOP:
+                ILOG(TAG, "[%s] AP stopped", __FUNCTION__);
+                goto refresh;
+                break;
+            case WIFI_EVENT_STA_START:
+                ILOG(TAG, "[%s] STA started", __FUNCTION__);
+                
+                // Only suppress ADC for AP→STA transitions (not APSTA mode)
+                #if defined CONFIG_LOGGER_ADC_ENABLED
+                wifi_mode_t current_mode = WIFI_MODE_NULL;
+                esp_err_t err = esp_wifi_get_mode(&current_mode);
+                if (err == ESP_OK && current_mode == WIFI_MODE_STA) {
+                    // This is AP→STA transition, voltage will increase, suppress ADC
+                    adc_suppress_events("AP to STA transition - voltage increase expected");
+                    ILOG(TAG, "ADC suppressed for AP→STA transition (voltage increase)");
+                } else {
+                    ILOG(TAG, "APSTA mode - no ADC suppression needed");
+                }
+                #endif
+                
+                goto refresh;
+                break;
+            case WIFI_EVENT_STA_STOP:
+                ILOG(TAG, "[%s] STA stopped", __FUNCTION__);
+                goto refresh;
+                break;
+            case WIFI_EVENT_STA_CONNECTED:
+                ILOG(TAG, "[%s] STA connected to AP", __FUNCTION__);
+                goto refresh;
+                break;
+            case WIFI_EVENT_STA_DISCONNECTED:
+                ILOG(TAG, "[%s] STA disconnected from AP", __FUNCTION__);
                 goto refresh;
                 break;
             default:
@@ -933,21 +1515,61 @@ static void wifi_event_handler(void *handler_args, esp_event_base_t base, int32_
     else if(base == IP_EVENT) {
         switch(id) {
             case IP_EVENT_STA_GOT_IP:
-            case IP_EVENT_STA_LOST_IP:
-                refresh:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] w %s", __FUNCTION__, wifi_event_strings(id));
-#endif
-#if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
-                if(no_auto_refresh && display_task_is_paused()){
-                    display_task_resume_for_times(1, -1, -1, false);
+                // Check connection and time sync status using utility functions
+                ILOG(TAG, "[%s] STA got IP - WiFi: %s, Time sync: %s", 
+                     __FUNCTION__,
+                     wifi_is_ready_for_operation() ? "Ready" : "Pending",
+                     wifi_time_is_synchronized() ? "Synced" : "Pending");
+                
+                if (!wifi_time_is_synchronized()) {
+                    ILOG(TAG, "[%s] Waiting for time synchronization...", __FUNCTION__);
                 }
-#endif
+                
+                // Resume ADC events for AP→STA transition (voltage should now be stable)
+                #if defined CONFIG_LOGGER_ADC_ENABLED
+                wifi_mode_t current_mode = WIFI_MODE_NULL;
+                esp_err_t err = esp_wifi_get_mode(&current_mode);
+                if (err == ESP_OK && current_mode == WIFI_MODE_STA) {
+                    // This was AP→STA transition, voltage is now stable
+                    ILOG(TAG, "STA got IP after AP→STA transition - resuming ADC events");
+                    adc_resume_events("AP→STA transition complete - voltage stable");
+                }
+                
+                // Cancel any pending delayed resume regardless of mode
+                if (adc_resume_pending) {
+                    ILOG(TAG, "Canceling delayed ADC resume - connection established");
+                    adc_resume_pending = false;
+                    
+                    if (adc_resume_timer) {
+                        esp_timer_stop(adc_resume_timer);
+                        esp_timer_delete(adc_resume_timer);
+                        adc_resume_timer = NULL;
+                    }
+                }
+                #endif
+                
+                goto refresh;
+                break;
+            case IP_EVENT_STA_LOST_IP:
+                WLOG(TAG, "[%s] STA lost IP - WiFi: %s, Time sync: %s", 
+                     __FUNCTION__,
+                     wifi_is_ready_for_operation() ? "Still ready" : "Not ready",
+                     wifi_time_is_synchronized() ? "Still valid" : "Lost");
+                goto refresh;
                 break;
             default:
                 break;
         }
     }
+    return;
+    
+    refresh:
+    FUNC_ENTRY_ARGS(TAG, " %s", wifi_event_strings(id));
+#if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
+    if(no_auto_refresh && display_task_is_paused()){
+        display_task_resume_for_times(1, -1, -1, false);
+    }
+#endif
 }
 #endif
 
@@ -957,7 +1579,9 @@ static void ui_event_handler(void *handler_args, esp_event_base_t base, int32_t 
     if(base == UI_EVENT) {
         switch(id) {
             case UI_EVENT_FLUSH_START:
+#if (C_LOG_LEVEL < 3)
                 ILOG(TAG, "[%s] d %s", __FUNCTION__, ui_event_strings(id));
+#endif
                 break;
             case UI_EVENT_FLUSH_DONE:
 #if (C_LOG_LEVEL < 2)
@@ -973,98 +1597,60 @@ static void ui_event_handler(void *handler_args, esp_event_base_t base, int32_t 
 #endif
 
 static esp_err_t events_init() {
-    if(esp_event_loop_create_default()) {
-        WLOG(TAG, "[%s] %s", __FUNCTION__, "event loop create fail.");
-        return ESP_FAIL;
+    FUNC_ENTRY(TAG);
+    if (s_event_loop_ready) {
+        return ESP_OK;
     }
-    // if(esp_event_handler_instance_register(ESP_EVENT_ANY_BASE, ESP_EVENT_ANY_ID, all_event_handler, NULL, NULL)){
-    // WLOG(TAG, "[%s] %s", __FUNCTION__, "all_event_handler");
-    // }
-#if defined(CONFIG_LOGGER_VFS_ENABLED)
-    if(esp_event_handler_register(VFS_EVENT, ESP_EVENT_ANY_ID, vfs_event_handler, NULL)){
-        WLOG(TAG, "[%s] event reg fail.", __FUNCTION__);
-    }
+    esp_err_t loop_err = esp_event_loop_create_default();
+    if (loop_err != ESP_OK) {
+#if (C_LOG_LEVEL < 3)
+        WLOG(TAG, "[%s] event loop create fail: %s", __FUNCTION__, esp_err_to_name(loop_err));
 #endif
-#if defined(CONFIG_LOGGER_HTTP_ENABLED)
-    if(esp_event_handler_register(OTA_AUTO_EVENT, ESP_EVENT_ANY_ID, ota_event_handler, NULL)){
-        WLOG(TAG, "[%s] event reg fail.", __FUNCTION__);
+        return loop_err;
     }
+    s_event_loop_ready = true;
+
+    esp_err_t err = register_event_handlers();
+    if (err != ESP_OK) {
+#if (C_LOG_LEVEL < 3)
+        WLOG(TAG, "[%s] event registration incomplete: %s", __FUNCTION__, esp_err_to_name(err));
 #endif
-    if(esp_event_handler_register(LOGGER_EVENT, ESP_EVENT_ANY_ID, logger_event_handler, NULL)){
-        WLOG(TAG, "[%s] event reg fail.", __FUNCTION__);
     }
-    if(esp_event_handler_register(LOGGER_CONFIG_EVENT, ESP_EVENT_ANY_ID, logger_cfg_event_handler, NULL)){
-        WLOG(TAG, "[%s] event reg fail.", __FUNCTION__);
-    }
-#if defined(CONFIG_UBLOX_ENABLED)
-    if(esp_event_handler_register(UBX_EVENT, ESP_EVENT_ANY_ID, ubx_event_handler, NULL)){
-        WLOG(TAG, "[%s] event reg fail.", __FUNCTION__);
-    }
-#endif
-#if defined(CONFIG_GPS_LOG_ENABLED)
-    if(esp_event_handler_register(GPS_LOG_EVENT, ESP_EVENT_ANY_ID, gps_log_event_handler, NULL)){
-        WLOG(TAG, "[%s] event reg fail.", __FUNCTION__);
-    }
-#endif
-#if defined(CONFIG_LOGGER_ADC_ENABLED)
-    if(esp_event_handler_register(ADC_EVENT, ESP_EVENT_ANY_ID, adc_event_handler, NULL)){
-        WLOG(TAG, "[%s] event reg fail.", __FUNCTION__);
-    }
-#endif
-#if defined(CONFIG_LOGGER_WIFI_ENABLED)
-    if(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL)){
-        WLOG(TAG, "[%s] event reg fail.", __FUNCTION__);
-    }
-#endif
-#if defined(CONFIG_DISPLAY_ENABLED)
-    if(esp_event_handler_register(UI_EVENT, ESP_EVENT_ANY_ID, ui_event_handler, NULL)){
-        WLOG(TAG, "[%s] event reg fail.", __FUNCTION__);
-    }
-#endif
-    return ESP_OK;
+    return err;
 }
 
 static esp_err_t events_deinit() {
-    // if(esp_event_handler_instance_unregister(ESP_EVENT_ANY_BASE, ESP_EVENT_ANY_ID, all_event_handler)){
-    //  WLOG(TAG, "[%s] %s", __FUNCTION__, "all_event_handler");
-    // }
-#if defined(CONFIG_LOGGER_VFS_ENABLED)
-    esp_event_handler_unregister(VFS_EVENT, ESP_EVENT_ANY_ID, vfs_event_handler);
+    FUNC_ENTRY(TAG);
+    if (!s_event_loop_ready) {
+        return ESP_OK;
+    }
+    unregister_event_handlers();
+    esp_err_t err = esp_event_loop_delete_default();
+    if (err != ESP_OK) {
+#if (C_LOG_LEVEL < 3)
+        WLOG(TAG, "[%s] event loop delete fail: %s", __FUNCTION__, esp_err_to_name(err));
 #endif
-#if defined(CONFIG_LOGGER_HTTP_ENABLED)
-    esp_event_handler_unregister(OTA_AUTO_EVENT, ESP_EVENT_ANY_ID, ota_event_handler);
-#endif
-    esp_event_handler_unregister(LOGGER_EVENT, ESP_EVENT_ANY_ID, logger_event_handler);
-    esp_event_handler_unregister(LOGGER_CONFIG_EVENT, ESP_EVENT_ANY_ID, logger_cfg_event_handler);
-#if defined(CONFIG_UBLOX_ENABLED)
-    esp_event_handler_unregister(UBX_EVENT, ESP_EVENT_ANY_ID, ubx_event_handler);
-#endif
-#if defined(CONFIG_GPS_LOG_ENABLED)
-    esp_event_handler_unregister(GPS_LOG_EVENT, ESP_EVENT_ANY_ID, gps_log_event_handler);
-#endif
-#if defined(CONFIG_LOGGER_ADC_ENABLED)
-    esp_event_handler_unregister(ADC_EVENT, ESP_EVENT_ANY_ID, adc_event_handler);
-#endif
-#if defined(CONFIG_LOGGER_WIFI_ENABLED)
-    esp_event_handler_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler);
-#endif
-#if defined(CONFIG_DISPLAY_ENABLED)
-    esp_event_handler_unregister(UI_EVENT, ESP_EVENT_ANY_ID, ui_event_handler);
-#endif
-    esp_event_loop_delete_default();
+    }
+    s_event_loop_ready = false;
     return ESP_OK;
 }
 
 // observer like callback
 static void config_changed_cb(const char *key) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] %s", __FUNCTION__, key);
-    if(strcmp(key, "screen_rotation")==0 || strcmp(key, "board_logo")==0||strcmp(key, "sail_logo")==0||strcmp(key, "speed_unit")==0 || strcmp(key, "sleep_info")==0) {
+#endif
+    if(strcmp(key, "screen_rotation")==0 || strcmp(key, "board_logo")==0||strcmp(key, "sail_logo")==0||strcmp(key, "speed_unit")==0 || strcmp(key, "sleep_info")==0 || strcmp(key, "bat_view") == 0) {
         g_context_rtc_add_config(&m_context_rtc, m_app_ctx.config);
+#if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
+        goto refresh;
+#endif
     }
 #if defined(CONFIG_DISPLAY_ENABLED)
-    if(strcmp(key, "screen_rotation")==0) {
+    if(strcmp(key, "screen_rotation") == 0) {
         display_set_rotation(m_app_ctx.config->screen.screen_rotation);
 #if defined(CONFIG_LCD_IS_EPD)
+    refresh:
         if(!m_app_ctx.screen_auto_refresh && display_task_is_paused()){
             display_task_resume_for_times(1, -1, -1, false);
         }
@@ -1078,8 +1664,10 @@ static void config_changed_cb(const char *key) {
 #endif
 }
 
+// ADC event suppression functions are now implemented in the adc module
+
 static void ctx_load_cb() {
-    ILOG(TAG, "[%s]", __FUNCTION__);
+    FUNC_ENTRY(TAG);
 #if defined(CONFIG_GPS_LOG_ENABLED)
     log_config_init();
 #endif
@@ -1087,6 +1675,10 @@ static void ctx_load_cb() {
     http_rest_init(CONFIG_WEB_APP_PATH);
 #endif
     m_app_ctx.config = config_new();
+    if(!m_app_ctx.config) {
+        ELOG(TAG, "[%s] config_new failed!", __FUNCTION__);
+        return;
+    }
     m_app_ctx.config->config_changed_screen_cb = config_changed_cb;
     g_context_defaults(&m_context);
     m_context.config = m_app_ctx.config;
@@ -1124,168 +1716,189 @@ static void ctx_load_cb() {
 #endif
 }
 
-static void setup(void) {
-    ILOG(TAG, "[%s]", __FUNCTION__);
-#if (C_LOG_LEVEL < 2)
-    DMEAS_START();
-#endif
+static void setup(uint8_t initial) {
+    FUNC_ENTRY(TAG);
     m_app_ctx.app_mode = APP_MODE_BOOT;
-    int ret = 0;
-    ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, "Init power");
 #if defined(CONFIG_IDF_TARGET_ESP32S3)
     init_power();
 #endif
-
-    ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, "Init events");
+    init_rtc();
+    wakeup_plan_t wake_plan = initial ? wakeup_init() : (wakeup_plan_t){0};
     events_init();
-
-    ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, "Init adc");
 #if defined(CONFIG_LOGGER_ADC_ENABLED)
-    adc_init();
-#endif
-
-    delay_ms(50);
-    update_bat();
+    adc_init();  // This now automatically initializes ULP if available
+    adc_set_low_battery_callback(on_low_battery_shutdown);  // Register shutdown callback
+    adc_set_minimum_battery_voltage(MINIMUM_VOLTAGE);       // Set voltage threshold
+    delay_ms(INIT_DELAY_MEDIUM_MS);
     
+    // Additional delay to ensure ADC has time for initial readings before state check
+    delay_ms(100);
+    
+    // Check initial charging state during boot - but don't override wakeup-detected charge mode
+    adc_battery_state_t initial_state = get_adc_state();
+    ILOG(TAG, "Boot: Initial ADC state = %d, current app_mode = %s", initial_state, app_mode_str[m_app_ctx.app_mode]);
+    
+    // if (m_app_ctx.app_mode != APP_MODE_CHARGE) {
+    //     // Only set charge mode if not already set by wakeup init
+    //     if (initial_state == ADC_BATTERY_CHARGING_STARTED || initial_state == ADC_BATTERY_HIGH) {
+    //         ILOG(TAG, "Boot: Charging detected - entering charge mode");
+    //         m_app_ctx.charging_is_on = 1;
+    //         m_app_ctx.charge_state = initial_state;
+    //         m_app_ctx.app_mode = APP_MODE_CHARGE;
+    //         adc_sync_initial_charging_state(1);
+    //     } else {
+    //         ILOG(TAG, "Boot: No charging - normal operation");
+    //         m_app_ctx.charging_is_on = 0;
+    //         m_app_ctx.charge_state = initial_state;
+    //         adc_sync_initial_charging_state(0);
+    //     }
+    // } else {
+    //     // Charge mode already set by wakeup - just sync the state
+    //     ILOG(TAG, "Boot: Charge mode already set by wakeup - syncing state");
+    //     m_app_ctx.charge_state = initial_state;
+    //     m_app_ctx.charging_is_on = (initial_state == ADC_BATTERY_CHARGING_STARTED || initial_state == ADC_BATTERY_HIGH) ? 1 : 0;
+    // }
+#endif
+    // Initial battery check is now handled by ADC timer automatically
 #if defined(CONFIG_LOGGER_USE_WDT)
     init_watchdog();
 #endif
-    ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, "Init rtc");
-    init_rtc();
-    m_app_ctx.screen_auto_refresh = m_context_rtc.RTC_screen_auto_refresh;
 #if defined(CONFIG_DISPLAY_ENABLED)
-    ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, "Init lcd");
+    m_app_ctx.screen_auto_refresh = m_context_rtc.RTC_screen_auto_refresh;
     lcd_init();
     display_set_rotation(m_context_rtc.RTC_screen_rotation);
 #if !defined(CONFIG_LCD_IS_EPD)
     display_drv_bl_set(m_context_rtc.RTC_screen_brightness==-1 ? SCR_DEFAULT_BRIGHTNESS : m_context_rtc.RTC_screen_brightness);
 #endif
-    ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, "Start display task");
     display_task_start();
     delay_ms(10);
 #endif
-    ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, "Init wakeup");
-    wakeup_init();  // Print the wakeup reason for ESP32, go back to sleep is timer is wake-up source !
-    // delay_ms(50);
-    ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, "Init button");
+    if (initial && wake_plan.immediate_sleep) {
+        go_to_sleep_or_restart(wake_plan);  // sleep immediately
+    }
 #if defined(CONFIG_LOGGER_BUTTON_ENABLED)
     init_button();
-    delay_ms(50);
+    delay_ms(INIT_DELAY_SHORT_MS);
 #endif
 
-    ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, "Init vfs");
-    vfs_init();
-
-    delay_ms(50);
-#if defined(CONFIG_DISPLAY_ENABLED)
-    ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, "Start screen periodic timer");
-#endif
-    // appstage 1, structures initialized, start gps.
-    delay_ms(50);
-    ret += 50;
-#if defined(CONFIG_BMX_ENABLE)
-    init_bmx();
-#endif
-
-#if defined(DEBUG)
-    ESP_LOGI(TAG, "[%s] verbosity mode %d.", __FUNCTION__, C_LOG_LEVEL);
-#elif defined(NDEBUG)
-    ESP_LOGI(TAG, "[%s] silent mode.", __FUNCTION__);
-#else
-    ESP_LOGW(TAG, "[%s] build debug mode not set.", __FUNCTION__);
-#endif
-    delay_ms(50);
-#if (C_LOG_LEVEL < 2)
+#if (C_LOG_LEVEL < 3)
+    ILOG(TAG, "[%s] verbosity mode %d.", __FUNCTION__, C_LOG_LEVEL);
     ILOG(TAG, "[%s] %s", __FUNCTION__, "Init done");
-    DMEAS_END(TAG, "[%s] took %llu us", __FUNCTION__);
 #endif
 }
 
-// static char rtbuf[BUFSIZ];
-void app_main(void) {
-    ILOG(TAG, "[%s]", __FUNCTION__);
-    uint8_t verbose = 0;
-    uint32_t loops = 0;
-#if defined(CONFIG_DISPLAY_ENABLED)
-#if defined(CONFIG_LCD_IS_EPD)
-    uint32_t millis = get_millis();
-#endif
-#endif
-    // rtc_wdt_protect_off();
-    setup();
-    while (1) {
-        if(loops%10==0) { // ~1sec
-            update_bat();
+static void service_power_requests(void) {
+    const bool restart_requested = m_context.request_restart;
+    const bool shutdown_requested = m_context.request_shutdown;
+
+    if (!restart_requested && !shutdown_requested) {
+        return;
+    }
+
+    if (restart_requested) {
+        if(m_app_ctx.app_mode == APP_MODE_CHARGE) {
+            setup(0);
         }
-        if (m_context.request_restart) {
+        else
             m_app_ctx.app_mode = APP_MODE_RESTART;
-            m_context.request_restart = 1;
-        }
-        else if (m_context.request_shutdown) {
-            m_app_ctx.app_mode = APP_MODE_SHUT_DOWN;
-            m_context.request_shutdown = 1;
-        }
-        if(m_context.request_shutdown || m_context.request_restart) {
+    } else {
+        m_app_ctx.app_mode = APP_MODE_SHUT_DOWN;
+    }
+
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
-            if(!m_app_ctx.screen_auto_refresh && display_task_is_paused()) {
-                display_task_resume_for_times(1, -1, -1, false); // one partial refresh
-            }
+    if(!m_app_ctx.screen_auto_refresh && display_task_is_paused()) {
+        display_task_resume_for_times(1, -1, -1, false); // one partial refresh
+    }
 #endif
-            m_context.request_shutdown = 0;
-            m_context.request_restart = 0;
-        }
-        if(!m_app_ctx.config_initialized && vfs_ctx.config_part != VFS_PART_MAX) {
+
+    m_context.request_restart = 0;
+    m_context.request_shutdown = 0;
+}
+
+static void ensure_app_ready(void) {
+    if (m_app_ctx.config_initialized
+        || m_app_ctx.app_mode == APP_MODE_CHARGE 
+        || m_app_ctx.app_mode == APP_MODE_SLEEP 
+        || m_app_ctx.app_mode == APP_MODE_SHUT_DOWN 
+        || m_app_ctx.app_mode == APP_MODE_RESTART) {
+        return;
+    }
+    if (vfs_ctx.vfs_initialized == 0) {
+        logger_buffer_pool_init();
+        vfs_init();
+#if defined(CONFIG_BMX_ENABLE)
+        init_bmx();
+#endif
+    }
+    if (vfs_ctx.config_part == VFS_PART_MAX) {
+        return;
+    }
 #if (C_LOG_LEVEL < 2)
-            ILOG(TAG, "[%s] config not loaded, do it as sdcard is initialized.", __FUNCTION__);
+    FUNC_ENTRY_ARGS(TAG, " config not loaded, do it as sdcard is initialized.");
 #endif
-            ctx_load_cb();
-        }
+    ctx_load_cb();
+}
+
+static bool run_periodic_diagnostics(uint32_t loop_counter) {
+    bool verbose = false;
 #if (C_LOG_LEVEL < 4)
 #if (C_LOG_LEVEL < 3)
-        if (loops++ >= 49) {
-            mem_info();
-            tasks_memory_info();
-            task_top();
-            print_lv_mem_mon();
-            if(m_app_ctx.app_mode == APP_MODE_GPS && m_context.gps.ubx_device) {
-                struct ubx_msg_s *ubxMessage = &m_context.gps.ubx_device->ubx_msg;
-                if(ubxMessage->navPvt.valid) {
-                    WLOG(TAG, "sAcc: %lu mm/s, numSv: %hhu, hDop: %.02f", ubxMessage->navPvt.sAcc, ubxMessage->navPvt.numSV, ubxMessage->navDOP.hDOP/1000.0f);
-                } else {
-                    WLOG(TAG, "sAcc: %lu mm/s, numSv: 0, hDop: %.02f", ubxMessage->navPvt.sAcc, ubxMessage->navDOP.hDOP/1000.0f);
-                }
-            }
+    const uint32_t diag_period = 50U;
 #else
-        if (loops++ >= 99) {
-            mem_info();
-            print_lv_mem_mon();
+    const uint32_t diag_period = 100U;
 #endif
-            loops=0;
-            verbose = 1;
-        } else
-            verbose = 0;
-#endif
-#if defined(CONFIG_DISPLAY_ENABLED)
-#if defined(CONFIG_LCD_IS_EPD)
-        if(m_app_ctx.screen_auto_refresh || m_app_ctx.display.first_flush_done) {
-#endif
-            task_app_mode_handler(verbose);
-#if defined(CONFIG_LCD_IS_EPD)
-            if(!m_app_ctx.screen_auto_refresh && m_app_ctx.display.first_flush_done == 1) {
+    if ((loop_counter % diag_period) == 0U) {
+        mem_info();
 #if (C_LOG_LEVEL < 2)
-                DLOG(TAG, "[%s] pause task when first_flush_done: %hhu count: %lu\n", __func__, m_app_ctx.display.first_flush_done, display_get_flush_count());
+        tasks_memory_info();
+        task_top();
 #endif
-                if(display_get_flush_count() >= 3 || (get_millis() - millis) > SEC_TO_MS(12)) {
-                    display_task_pause();
-                    // display_task_resume_for_times(2, -1, -1, false);
-                    m_app_ctx.display.first_flush_done = 2;
-                }
+        print_lv_mem_mon();
+#if (C_LOG_LEVEL < 3)
+        if(m_app_ctx.app_mode == APP_MODE_GPS && m_context.gps.ubx_device) {
+            struct ubx_msg_s *ubxMessage = &m_context.gps.ubx_device->ubx_msg;
+            if(ubxMessage->navPvt.valid) {
+                WLOG(TAG, "sAcc: %lu mm/s, numSv: %hhu, hDop: %.02f", ubxMessage->navPvt.sAcc, ubxMessage->navPvt.numSV, ubxMessage->navDOP.hDOP/1000.0f);
+            } else {
+                WLOG(TAG, "sAcc: %lu mm/s, numSv: 0, hDop: %.02f", ubxMessage->navPvt.sAcc, ubxMessage->navDOP.hDOP/1000.0f);
             }
         }
 #endif
-#endif
-        delay_ms(MS_50);
+        verbose = true;
     }
+#else
+    UNUSED_PARAMETER(loop_counter);
+#endif
+    return verbose;
+}
+
+static void service_display(bool verbose, uint32_t loop_start_ms) {
+#if defined(CONFIG_DISPLAY_ENABLED)
+#if defined(CONFIG_LCD_IS_EPD)
+    if(!m_app_ctx.screen_auto_refresh && !m_app_ctx.display.first_flush_done) {
+        printf("** Wait for first flush done %s\n", app_mode_str[m_app_ctx.app_mode]);
+        return;
+    }
+#endif
+    task_app_mode_handler(verbose);
+    // WiFi mode change handling is now done via direct API calls from HID module
+#if defined(CONFIG_LCD_IS_EPD)
+    if(!m_app_ctx.screen_auto_refresh && m_app_ctx.display.first_flush_done == 1) {
+        printf("** pause task when first_flush_done: %s %hhu count: %lu\n", app_mode_str[m_app_ctx.app_mode], m_app_ctx.display.first_flush_done, display_get_flush_count());
+        if(display_get_flush_count() >= 3 || (get_millis() - loop_start_ms) > SEC_TO_MS(12)) {
+            printf("** pause task when first_flush_done: %s %hhu count: %lu\n", app_mode_str[m_app_ctx.app_mode], m_app_ctx.display.first_flush_done, display_get_flush_count());
+            display_task_pause();
+            m_app_ctx.display.first_flush_done = 2;
+        }
+    }
+#endif
+#else
+    UNUSED_PARAMETER(verbose);
+    UNUSED_PARAMETER(loop_start_ms);
+#endif
+}
+static void cleanup(void) {
+    FUNC_ENTRY(TAG);
 #if defined(CONFIG_LOGGER_USE_WDT)
     run_wdt_loop = false;
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -1296,20 +1909,63 @@ void app_main(void) {
 #if defined(CONFIG_BMX_ENABLE)
     deinit_bmx();
 #endif
+#if defined CONFIG_LOGGER_ADC_ENABLED
+    // Suppress ADC events during system shutdown
+    adc_suppress_events("system shutdown");
+#endif
+
+#if defined(CONFIG_LOGGER_WIFI_ENABLED)
+    wifi_deinit();
+#endif
 #if defined(CONFIG_GPS_LOG_ENABLED)
     gps_deinit();
 #endif
+    if (m_app_ctx.config) {
+        config_delete(m_app_ctx.config);
+        m_app_ctx.config = NULL;
+        m_app_ctx.config_initialized = 0;
+    }
     vfs_deinit();
     // esp_timer_stop(screen_periodic_timer);
-#if defined(CONFIG_LOGGER_BUTTON_ENABLED)
-    deinit_button();
+#if defined(CONFIG_LOGGER_ADC_ENABLED)
+    if(get_adc_charging_state()) {
+        // Battery voltage is maintained by ADC timer automatically
+        m_app_ctx.app_mode = APP_MODE_CHARGE;
+        ILOG(TAG, "[%s] charging is on, go to charge mode.", __FUNCTION__);
+        return;
+    }
+    adc_deinit();  // This now cleans up all ADC resources including low battery timer
 #endif
 #if defined(CONFIG_DISPLAY_ENABLED)
     lcd_deinit();
 #endif
-    config_delete(m_app_ctx.config);
-#ifdef CONFIG_UBLOX_ENABLED
-    ubx_config_delete(m_context.gps.ubx_device);
+#if defined(CONFIG_LOGGER_BUTTON_ENABLED)
+    deinit_button();
 #endif
     events_deinit();
+}
+
+void app_main(void) {
+    FUNC_ENTRY(TAG);
+    uint32_t loop_counter = 0;
+#if defined(CONFIG_LCD_IS_EPD)
+    const uint32_t loop_start_ms = get_millis();
+#else
+    const uint32_t loop_start_ms = 0U;
+#endif
+    // rtc_wdt_protect_off();
+    setup(1);
+    while (1) {
+        // Battery monitoring is now handled by ADC timer - no periodic calls needed
+
+        ++loop_counter;
+        const bool verbose = run_periodic_diagnostics(loop_counter);
+
+        service_power_requests();
+        ensure_app_ready();
+        service_display(verbose, loop_start_ms);
+
+        delay_ms(MAIN_LOOP_PERIOD_MS);
+    }
+    cleanup();
 }
