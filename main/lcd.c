@@ -1756,7 +1756,7 @@ uint32_t screen_cb(void* arg) {
         goto end;
     }
 
-    else if(get_adc_state() == ADC_BATTERY_LOW || get_adc_state() == ADC_BATTERY_CRITICAL_LOW) {
+    else if(get_adc_state() == ADC_BATTERY_CRITICAL_LOW) {
         delay=_update_screen(display_state.display, SCREEN_MODE_LOW_BAT, 0);
         ctx->cur_screen = CUR_SCREEN_LOW_BAT;
         goto end;

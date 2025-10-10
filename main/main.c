@@ -1,4 +1,3 @@
-
 #include "display.h"
 #include "private.h"
 
@@ -23,6 +22,13 @@
 #ifdef CONFIG_LOGGER_ADC_ENABLED
 #include "adc.h"
 #include "adc_events.h"
+#if defined(CONFIG_ULP_COPROC_ENABLED)
+extern RTC_DATA_ATTR bool ulp_initialized;
+/* Track if ULP was running before sleep to handle intermediate timer wakes.
+ * When ULP wakes → timer wake → long sleep, we need to resume ULP (not restart).
+ * This flag persists across the intermediate timer wake. */
+RTC_DATA_ATTR static bool ulp_was_running = false;
+#endif
 #endif
 #ifdef CONFIG_BMX_ENABLE
 #include "bmx.h"
@@ -122,11 +128,11 @@ struct main_ctx_s m_app_ctx = {
 };
 
 #if (C_LOG_LEVEL < 3)
-static const char * const app_mode_str[] = { APP_MODE_LIST(STRINGIFY) };
-static const char * const cur_screen_str[] = { CUR_SCREEN_LIST(STRINGIFY) };
+const char * const app_mode_str[] = { APP_MODE_LIST(STRINGIFY) };
+const char * const cur_screen_str[] = { CUR_SCREEN_LIST(STRINGIFY) };
 #else
-static const char * const app_mode_str[] = { "APP_MODE_EVENT" };
-static const char * const cur_screen_str[] = { "CUR_SCREEN_EVENT" };
+const char * const app_mode_str[] = { "APP_MODE_EVENT" };
+const char * const cur_screen_str[] = { "CUR_SCREEN_EVENT" };
 #endif
 
 #if (defined(GPSSS))
@@ -299,26 +305,29 @@ static void configure_sleep_wakeup_sources(uint64_t sleep_time, bool enable_ext0
         FUNC_ENTRY_ARGS(TAG, "Enabled timer wakeup: %llu seconds", sleep_time);
     }
     esp_err_t ret = 0;
+#if !defined(CONFIG_ULP_BUTTON_ENABLED) || (CONFIG_ULP_BUTTON_GPIO != WAKE_UP_GPIO)  || !defined(CONFIG_LOGGER_ADC_ENABLED) || !defined(CONFIG_ULP_COPROC_ENABLED)
     // Configure EXT0/EXT1 wakeup (button/reed switch)
     // NOTE: When ULP button monitoring is enabled, EXT wakeup is disabled to avoid conflicts
     if (enable_ext0) {
-#if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED) && defined(CONFIG_ULP_BUTTON_ENABLED)
+        uint8_t ext_num = 0;
         // When ULP button monitoring is enabled, disable EXT wakeup - ULP handles button
         if (enable_ulp) {
-            FUNC_ENTRY_ARGS(TAG, "ULP button monitoring enabled - skipping EXT wakeup for GPIO %d", WAKE_UP_GPIO);
-            // ret = esp_sleep_enable_ext1_wakeup((1ULL << WAKE_UP_GPIO), ESP_EXT1_WAKEUP_ANY_LOW);
+#if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
+            ret = esp_sleep_enable_ext1_wakeup((1ULL << WAKE_UP_GPIO), 0);
+            ext_num = 1;
         } else {
 #endif
             ret = esp_sleep_enable_ext0_wakeup(WAKE_UP_GPIO, 0);
-            if (ret == ESP_OK) {
-                FUNC_ENTRY_ARGS(TAG, "Enabled EXT0 wakeup on GPIO %d", WAKE_UP_GPIO);
-            } else {
-                FUNC_ENTRY_ARGS(TAG, "Failed to enable EXT0 wakeup: %s", esp_err_to_name(ret));
-            }
-#if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED) && defined(CONFIG_ULP_BUTTON_ENABLED)
         }
-#endif
+        if (ret == ESP_OK) {
+            FUNC_ENTRY_ARGS(TAG, "Enabled EXT%d wakeup on GPIO %d", ext_num, WAKE_UP_GPIO);
+        } else {
+            FUNC_ENTRY_ARGS(TAG, "Failed to enable EXT%d wakeup: %s", ext_num, esp_err_to_name(ret));
+        }
     }
+#else
+    FUNC_ENTRY_ARGS(TAG, "ULP button enabled - skipping EXT wakeup for GPIO %d", WAKE_UP_GPIO);
+#endif
     
     // Configure ULP wakeup (battery monitoring and button monitoring)  
 #if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
@@ -344,38 +353,75 @@ static void configure_sleep_wakeup_sources(uint64_t sleep_time, bool enable_ext0
 }
 
 static void low_to_sleep(uint64_t sleep_time, bool enable_ext0, uint8_t enable_ulp) {
-#if defined(CONFIG_LOGGER_ADC_ENABLED)
-#if defined(CONFIG_ULP_COPROC_ENABLED)
-    if(enable_ulp == 2) {
-        init_ulp_program();
-    }
-#endif
-#endif
-    gpio_set_direction((gpio_num_t)13, (gpio_mode_t)GPIO_MODE_OUTPUT);
-    gpio_set_level((gpio_num_t)13, 1);  // flash in deepsleep, CS stays HIGH!!
+#if CONFIG_IDF_TARGET_ESP32
+#if defined(CONFIG_HAS_BOARD_LILYGO_EPAPER_T5)
+    // On LilyGo T5, we need to set SD card CS pin to output and HIGH to avoid power drain during deep sleep
+    int sd_cs_gpio = 13;
+    gpio_set_direction(sd_cs_gpio, GPIO_MODE_OUTPUT);
+    gpio_set_level(sd_cs_gpio, 1);
     gpio_deep_sleep_hold_en();
+#endif
+#if CONFIG_ULP_BUTTON_GPIO != 12 && WAKE_UP_GPIO != 12
+    rtc_gpio_isolate(GPIO_NUM_12);
+#endif
+#endif
 
 #if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
+    /* Check wake source - need to distinguish between:
+     * 1. Direct ULP wake: Resume ULP with preserved history
+     * 2. Timer wake after ULP wake: Resume ULP (flag persists through timer wake)
+     * 3. Timer/button wake (fresh start): Start ULP with cleared history */
+    esp_sleep_wakeup_cause_t prev_wake = esp_sleep_get_wakeup_cause();
+    bool is_ulp_resume = (prev_wake == ESP_SLEEP_WAKEUP_ULP) || ulp_was_running;
+    
     // Enable ULP wakeup for battery monitoring if battery is low or critical
     // enable_ulp = false;
     if (m_context_rtc.RTC_voltage_bat < (MINIMUM_VOLTAGE + 0.2f)) {
         ILOG(TAG, "Battery low (%.2fV), enabling ULP monitoring during sleep", 
                  m_context_rtc.RTC_voltage_bat);
     }
+    
+    /* Force enable_ulp=true if resuming from ULP wake (or timer wake after ULP wake),
+     * otherwise the ULP will stop monitoring and never wake again */
+    if (is_ulp_resume && !enable_ulp) {
+        ILOG(TAG, "Forcing ULP enable: resuming after ULP wake (was_running=%d)", ulp_was_running);
+        enable_ulp = 1;
+    }
+    
     if(enable_ulp) {
-        start_ulp_program();
+        /* Choose appropriate ULP restart method based on wake source:
+         * - ULP wake (or timer after ULP): Resume monitoring, preserve ADC history
+         * - Other wake: Clear ADC history for fresh sleep cycle (voltage changed during wake) */
+        if (is_ulp_resume) {
+            ILOG(TAG, "Resuming ULP after ULP wake (preserving ADC history, was_running=%d)", ulp_was_running);
+            resume_ulp_program();    // Resume ULP without clearing history
+            ulp_was_running = true;  // Keep flag set for next sleep
+        } else {
+            ILOG(TAG, "Starting ULP for fresh sleep cycle (clearing ADC history)");
+            start_ulp_program();     // Start ULP with fresh history
+            ulp_was_running = true;  // Set flag - ULP is now running
+        }
  #if !CONFIG_IDF_TARGET_ESP32
         /* RTC peripheral power domain needs to be kept on to keep SAR ADC related configs during sleep */
         esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
 #endif
+    } else {
+        /* ULP not enabled for this sleep - clear the flag.
+         * This handles button wake → user activity → sleep without ULP */
+        ulp_was_running = false;
     }
 #endif
     
     // Configure all wakeup sources in coordinated manner
     configure_sleep_wakeup_sources(sleep_time, enable_ext0, enable_ulp);
     
-    FUNC_ENTRY_ARGS(TAG, " sleep: %ds timer + EXT0 button + %s",
-         (int)sleep_time, enable_ulp ? "ULP battery monitoring" : "no ULP");
+#if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
+    /* Log ULP state right before deep sleep for debugging */
+    if (enable_ulp) {
+        ILOG(TAG, "Entering deep sleep - ULP cycle_count=%lu, was_running=%d", 
+             adc_ulp_get_cycle_count(), ulp_was_running);
+    }
+#endif
     
     esp_deep_sleep(TO_M_UL(sleep_time));
 }
@@ -403,6 +449,14 @@ Method to print the reason by which ESP32 has been awaken from sleep
 
 static wakeup_plan_t wakeup_init(void) {
     FUNC_ENTRY(TAG);
+    
+#if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
+    /* Initialize ULP program binary on every boot (power-on or wake from sleep)
+     * This function checks reset reason and only reloads if needed (power-on reset).
+     * Must be called early before any ULP operations. */
+    init_ulp_program();
+#endif
+    
     wakeup_plan_t plan = {
         .immediate_sleep = false,
         .sleep_time = TIME_TO_SLEEP,
@@ -413,7 +467,17 @@ static wakeup_plan_t wakeup_init(void) {
     esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
     uint8_t start_ulp = 0;
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-
+#if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
+    if(wakeup_reason){
+        ILOG(TAG, "ULP enabled, Logging ULP ADC values");
+        debug_ulp_status();
+    }
+    /* Update last_wake_status based on current wake source:
+     * - ULP ADC wake: save current as last for next comparison
+     * - Other wake: clear last (no ADC wake to compare) */
+    uint8_t ulp_source = adc_ulp_after_wake();
+    
+#endif
     switch (wakeup_reason) {
         case ESP_SLEEP_WAKEUP_EXT0:
         case ESP_SLEEP_WAKEUP_EXT1:
@@ -421,9 +485,11 @@ static wakeup_plan_t wakeup_init(void) {
             gpio_set_direction((gpio_num_t)WAKE_UP_GPIO, GPIO_MODE_INPUT);
             gpio_set_pull_mode((gpio_num_t)WAKE_UP_GPIO, GPIO_PULLUP_ONLY);
             rtc_gpio_deinit(WAKE_UP_GPIO);
-            m_context.reed = 1;
 #if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
-            adc_ulp_clear_last_wake_reason();
+            /* Button wake means user wants to interact - clear the running flag
+             * so ULP doesn't restart until user finishes and system goes to proper sleep */
+            ulp_was_running = false;
+            goto ulp_clear_wake_sources;
 #endif
             break;
         case ESP_SLEEP_WAKEUP_TIMER:
@@ -434,68 +500,70 @@ static wakeup_plan_t wakeup_init(void) {
         case ESP_SLEEP_WAKEUP_ULP:
 #if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
             {
-                ILOG(TAG, "%s - bat: %.2f", wakeup_reasons[wakeup_reason], m_context_rtc.RTC_voltage_bat);
-                
+#ifdef CONFIG_ULP_BUTTON_ENABLED
                 // Check if button long press detected
-                if (ulp_button_long_press_detected()) {
-                    ILOG(TAG, "ULP wakeup: Button long press detected");
-                    // m_app_ctx.button_press_mode = 2; // Long press
-                    // Wake up normally to handle button press
+                if (ulp_source & WAKE_SOURCE_BUTTON) {
+                    ILOG(TAG, "ULP button wake");
+                    /* ULP button wake means user wants to interact - clear the running flag
+                     * so ULP doesn't restart until user finishes and system goes to proper sleep */
+                    ulp_was_running = false;
                 }
-                
-                // Check if ADC threshold triggered
-                else if (ulp_adc_threshold_triggered()) {
-                    adc_battery_state_t state = get_battery_state_from_ulp();
-                    uint32_t adc_reason = ulp_get_adc_wake_reason();
-                    ILOG(TAG, "ULP wakeup: ADC threshold (reason=%lu, state=%d)", adc_reason, state);
-                    debug_ulp_status();
+                else 
+#endif
+                if (ulp_source & WAKE_SOURCE_ADC) {
                     
-                    switch (state) {
-                        case ADC_BATTERY_LOW:
-                        case ADC_BATTERY_CRITICAL_LOW:
-                            WLOG(TAG, "ULP wakeup: Battery critical low");
-                            plan.immediate_sleep = true;
-                            break;
-                        case ADC_BATTERY_CHARGING_STARTED:
-                            ILOG(TAG, "ULP wakeup: Charging started");
-                            m_app_ctx.app_mode = APP_MODE_CHARGE;
-                            // ADC module manages both charge_state and charging_is_on
-                            adc_sync_initial_charging_state(1);
-                            break;
-                        case ADC_BATTERY_CHARGING_STOPPED:
-                            ILOG(TAG, "ULP wakeup: Charging stopped");
-                            plan.immediate_sleep = true;
-                            // ADC module manages both charge_state and charging_is_on
-                            adc_sync_initial_charging_state(0);
-                            break;
-                        default:
-                            break;
+                        adc_battery_state_t state = get_battery_state_from_ulp();
+                        switch (state) {
+                            case ADC_BATTERY_LOW:
+                            case ADC_BATTERY_CRITICAL_LOW:
+                                WLOG(TAG, "ULP wakeup: Battery critical low");
+                                plan.immediate_sleep = true;
+                                break;
+                            case ADC_BATTERY_CHARGING_STARTED:
+                                ILOG(TAG, "ULP wakeup: Charging started");
+                                m_app_ctx.app_mode = APP_MODE_CHARGE;
+                                // ADC module manages both charge_state and charging_is_on
+                                adc_sync_initial_charging_state(1);
+                                break;
+                            case ADC_BATTERY_CHARGING_STOPPED:
+                                ILOG(TAG, "ULP wakeup: Charging stopped");
+                                plan.immediate_sleep = true;
+                                // ADC module manages both charge_state and charging_is_on
+                                adc_sync_initial_charging_state(0);
+                                break;
+                            default:
+                                break;
                     }
                 }
                 
-                // Clear wake sources after processing
-                ulp_clear_wake_sources();
+                
+                // NOTE: Do NOT start ULP here - main program is about to run and ULP can't
+                // run simultaneously with main CPU (both would access ADC). ULP will be
+                // started in low_to_sleep() just before entering deep sleep.
                 
                 // If ULP button monitoring was enabled, deinitialize button GPIO from RTC mode
                 // so logger_button module can configure it for normal GPIO use
 #ifdef CONFIG_ULP_BUTTON_ENABLED
-                ILOG(TAG, "Deinitializing button GPIO%d from RTC mode for normal GPIO use", CONFIG_ULP_BUTTON_GPIO);
-                rtc_gpio_deinit(CONFIG_ULP_BUTTON_GPIO);
+                vTaskDelay(pdMS_TO_TICKS(10));
                 // Set button context flag if it was a button wake
-                if (ulp_button_long_press_detected()) {
-                    m_context.reed = 1;  // Set button press flag for compatibility
+                if (ulp_source & WAKE_SOURCE_BUTTON) {
+                    ILOG(TAG, "ULP wakeup: Button long press wakeup detected");
+                    // Handle button wake appropriately
                 }
 #endif
+                // Clear wake sources after processing
             }
 #else
             ILOG(TAG, "%s", wakeup_reasons[wakeup_reason]);
 #endif
             start_ulp = 2;
+            goto ulp_clear_wake_sources;
             break;
         default:
             ILOG(TAG, "%s int: %d", wakeup_reasons[7], wakeup_reason);
+            ulp_clear_wake_sources:
 #if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
-        adc_ulp_clear_last_wake_reason();
+            adc_ulp_clear_wake_sources();
 #endif
             break;
     }
@@ -1015,7 +1083,10 @@ void task_app_mode_handler(int verbose) {
             ILOG(TAG, "[%s] mode: %s", __FUNCTION__, app_mode_str[m_app_ctx.app_mode]);
             gps_shut_down();  // save gps
             if (m_app_ctx.app_mode == APP_MODE_SHUT_DOWN) {
-                // go to sleep after 3 s, this to prevent booting when GPIO39 is still low !
+#if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
+                // Clear ULP wake state before sleep so it starts fresh
+                adc_ulp_clear_wake_sources();
+#endif
                 go_to_sleep_or_restart((wakeup_plan_t){1, 3, false, false });
             } else {
                 // immediate restart
@@ -1863,6 +1934,16 @@ static bool run_periodic_diagnostics(uint32_t loop_counter) {
                 WLOG(TAG, "sAcc: %lu mm/s, numSv: 0, hDop: %.02f", ubxMessage->navPvt.sAcc, ubxMessage->navDOP.hDOP/1000.0f);
             }
         }
+#endif
+#if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
+        /* Monitor ULP activity during wake time - shows if ULP is running */
+        static uint32_t last_cycle_count = 0;
+        uint32_t current_cycle = adc_ulp_get_cycle_count();
+        int32_t delta = (int32_t)(current_cycle - last_cycle_count);
+        ILOG(TAG, "ULP cycle_count: %lu (delta: %ld since last check) - %s", 
+             current_cycle, delta, delta > 0 ? "RUNNING" : "FROZEN");
+        last_cycle_count = current_cycle;
+        debug_ulp_status();
 #endif
         verbose = true;
     }
