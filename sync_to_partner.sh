@@ -10,4 +10,4 @@ if [ "$DRY" != "" ]; then
 a=n
 fi
 
-rsync -av$a --exclude=.vscode --exclude='*.lock' --exclude=sdkconfig --exclude='*.old' --exclude=managed_components --exclude=node_modules --exclude=build --exclude=.DS_Store "$f" "$t"
+rsync -av$a --exclude=.ccls-cache --exclude=.vscode --exclude='*.lock' --exclude=sdkconfig --exclude='*.old' --exclude=managed_components --exclude=node_modules --exclude=build --exclude=.DS_Store "$f" "$t"

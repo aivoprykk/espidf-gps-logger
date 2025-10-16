@@ -127,7 +127,7 @@ struct main_ctx_s m_app_ctx = {
 #endif
 };
 
-#if (C_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL <= LOG_INFO_NUM) // 2 - info
 const char * const app_mode_str[] = { APP_MODE_LIST(STRINGIFY) };
 const char * const cur_screen_str[] = { CUR_SCREEN_LIST(STRINGIFY) };
 #else
@@ -155,6 +155,9 @@ static const char * const wakeup_reasons[] = {
 
 #if defined(CONFIG_LOGGER_VFS_ENABLED)
 static void vfs_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data);
+#endif
+#if defined(CONFIG_LOGGER_HTTP_ENABLED)
+static void ota_fw_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data);
 #endif
 #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
 static void ota_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data);
@@ -232,8 +235,11 @@ static esp_err_t register_event_handlers(void) {
 #if defined(CONFIG_LOGGER_VFS_ENABLED)
     REGISTER_EVENT(VFS_EVENT, vfs_event_handler);
 #endif
-#if defined(CONFIG_OTA_USE_AUTO_UPDATE) && defined(CONFIG_LOGGER_HTTP_ENABLED)
+#if defined(CONFIG_LOGGER_HTTP_ENABLED)
+    REGISTER_EVENT(OTA_FW_EVENT, ota_fw_event_handler);
+#if defined(CONFIG_OTA_USE_AUTO_UPDATE)
     REGISTER_EVENT(OTA_AUTO_EVENT, ota_event_handler);
+#endif
 #endif
     REGISTER_EVENT(LOGGER_EVENT, logger_event_handler);
     REGISTER_EVENT(LOGGER_CONFIG_EVENT, logger_cfg_event_handler);
@@ -269,8 +275,11 @@ static void unregister_event_handlers(void) {
 #if defined(CONFIG_LOGGER_VFS_ENABLED)
     UNREGISTER_EVENT(VFS_EVENT, vfs_event_handler);
 #endif
-#if defined(CONFIG_OTA_USE_AUTO_UPDATE) && defined(CONFIG_LOGGER_HTTP_ENABLED)
+#if defined(CONFIG_LOGGER_HTTP_ENABLED)
+    UNREGISTER_EVENT(OTA_FW_EVENT, ota_fw_event_handler);
+#if defined(CONFIG_OTA_USE_AUTO_UPDATE)
     UNREGISTER_EVENT(OTA_AUTO_EVENT, ota_event_handler);
+#endif
 #endif
     UNREGISTER_EVENT(LOGGER_EVENT, logger_event_handler);
     UNREGISTER_EVENT(LOGGER_CONFIG_EVENT, logger_cfg_event_handler);
@@ -309,12 +318,16 @@ static void configure_sleep_wakeup_sources(uint64_t sleep_time, bool enable_ext0
     // Configure EXT0/EXT1 wakeup (button/reed switch)
     // NOTE: When ULP button monitoring is enabled, EXT wakeup is disabled to avoid conflicts
     if (enable_ext0) {
+#if C_LOG_LEVEL <= LOG_INFO_NUM
         uint8_t ext_num = 0;
+#endif
         // When ULP button monitoring is enabled, disable EXT wakeup - ULP handles button
         if (enable_ulp) {
 #if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
             ret = esp_sleep_enable_ext1_wakeup((1ULL << WAKE_UP_GPIO), 0);
+#if C_LOG_LEVEL <= LOG_INFO_NUM
             ext_num = 1;
+#endif
         } else {
 #endif
             ret = esp_sleep_enable_ext0_wakeup(WAKE_UP_GPIO, 0);
@@ -346,7 +359,7 @@ static void configure_sleep_wakeup_sources(uint64_t sleep_time, bool enable_ext0
 #endif
     
     // Log all enabled wakeup sources for debugging
-#if (C_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL <= LOG_INFO_NUM) // 2 - info
     FUNC_ENTRY_ARGS(TAG, "Sleep configured with wakeup sources: timer=%d, ext0=%d, ulp=%d", 
              sleep_time > 0, enable_ext0, enable_ulp);
 #endif
@@ -430,7 +443,7 @@ static void low_to_sleep(uint64_t sleep_time, bool enable_ext0, uint8_t enable_u
 
 // Battery low callback - called by ADC module when low battery timer expires
 static void on_low_battery_shutdown(void) {
-#if (C_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL <= LOG_INFO_NUM) // 2 - info
     WLOG(TAG, "[%s] low battery shutdown triggered by ADC module", __FUNCTION__);
 #endif
     m_context.request_shutdown = 1;
@@ -590,7 +603,7 @@ static void go_to_sleep_or_restart(wakeup_plan_t plan) {
     if(m_app_ctx.app_mode == APP_MODE_CHARGE) {
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
         if(!m_app_ctx.screen_auto_refresh && display_task_is_paused()) {
-            display_task_resume_for_times(1, -1, -1, false);
+            display_task_resume_for_times(2, -1, -1, false);
         }
 #endif
         return;
@@ -773,7 +786,7 @@ static void wifi_deinit(void) {
 #if defined(CONFIG_LOGGER_WIFI_ENABLED)
 // WiFi mode change callback implementations
 void wifi_before_mode_change_callback(void) {
-#if (C_LOG_LEVEL < 2)
+#if (C_LOG_LEVEL <= LOG_DEBUG_NUM) // 3 - debug
     ILOG(TAG, "[%s] WiFi mode change starting - suppressing ADC events & syncing config", __func__);
 #endif
 #if defined CONFIG_LOGGER_ADC_ENABLED
@@ -958,7 +971,7 @@ void app_mode_wifi_handler(int verbose) {
     gps_shut_down();  // save gps
     
     if (!wifi_context.s_wifi_initialized) {
-#if (C_LOG_LEVEL < 2)
+#if (C_LOG_LEVEL <= LOG_DEBUG_NUM) // 3 - debug
         ILOG(TAG, "[%s] first turn wifi on", __FUNCTION__);
 #endif
         wifi_ensure_callbacks_registered();
@@ -1026,9 +1039,7 @@ void app_mode_wifi_handler(int verbose) {
 
 void app_mode_gps_handler(int verbose) {
     if (m_app_ctx.app_mode_gps_on) return;
-#if (C_LOG_LEVEL < 2)
     DMEAS_START();
-#endif
     m_app_ctx.app_mode = APP_MODE_GPS;
     
 #if defined CONFIG_LOGGER_ADC_ENABLED
@@ -1068,9 +1079,7 @@ void app_mode_gps_handler(int verbose) {
         adc_resume_events("GPS mode setup complete");
 #endif
 
-#if (C_LOG_LEVEL < 2)
-        DMEAS_END(TAG, "[%s] took %llu us", __FUNCTION__);
-#endif
+        DMEAS_END(TAG);
     }
 }
 
@@ -1087,7 +1096,7 @@ void task_app_mode_handler(int verbose) {
                 // Clear ULP wake state before sleep so it starts fresh
                 adc_ulp_clear_wake_sources();
 #endif
-                go_to_sleep_or_restart((wakeup_plan_t){1, 3, false, false });
+                go_to_sleep_or_restart((wakeup_plan_t){1, 2, false, false });
             } else {
                 // immediate restart
                 go_to_sleep_or_restart((wakeup_plan_t){1, 0, false, false });  // restart
@@ -1146,28 +1155,28 @@ static void vfs_event_handler(void *handler_args, esp_event_base_t base, int32_t
     if(base == VFS_EVENT) {
         switch(id) {
             case VFS_EVENT_SDCARD_MOUNTED:
-                ILOG(TAG, "[%s] %s", __FUNCTION__, vfs_event_strings[id]);
+                FUNC_ENTRY_ARGS(TAG, " %s", vfs_event_strings(id));
                 // m_context.sdOK = true;
                 //m_context.freeSpace = sdcard_space();
                 break;
             case VFS_EVENT_SDCARD_MOUNT_FAILED:
-                ILOG(TAG, "[%s] %s", __FUNCTION__, vfs_event_strings[id]);
+                FUNC_ENTRY_ARGS(TAG, " %s", vfs_event_strings(id));
                 break;
             case VFS_EVENT_SDCARD_UNMOUNTED:
-                ILOG(TAG, "[%s] %s", __FUNCTION__, vfs_event_strings[id]);
+                FUNC_ENTRY_ARGS(TAG, " %s", vfs_event_strings(id));
                 // m_context.sdOK = false; 
                 break;
             case VFS_EVENT_FAT_PARTITION_MOUNTED:
-                ILOG(TAG, "[%s] %s", __FUNCTION__, vfs_event_strings[id]);
+                FUNC_ENTRY_ARGS(TAG, " %s", vfs_event_strings(id));
                 // m_context.sdOK = true;
                 break;
             case VFS_EVENT_FAT_PARTITION_MOUNT_FAILED:
-                ILOG(TAG, "[%s] %s", __FUNCTION__, vfs_event_strings[id]);
+                FUNC_ENTRY_ARGS(TAG, " %s", vfs_event_strings(id));
                 break;
             case VFS_EVENT_FAT_PARTITION_UNMOUNTED:
                 break;
             case VFS_EVENT_LOG_PARTITION_CHANGED:
-                ILOG(TAG, "[%s] %s", __FUNCTION__, vfs_event_strings[id]);
+                FUNC_ENTRY_ARGS(TAG, " %s", vfs_event_strings(id));
                 if(log_files_opened(&m_context.gps)) {
                     close_files(&m_context.gps);
                     log_config_init();
@@ -1193,40 +1202,78 @@ static void vfs_event_handler(void *handler_args, esp_event_base_t base, int32_t
 }
 #endif
 
+#if defined(CONFIG_LOGGER_HTTP_ENABLED)
+static void ota_fw_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data) {
+    uint8_t no_auto_refresh = m_app_ctx.config ? !m_app_ctx.screen_auto_refresh : 0;
+    if(base == OTA_FW_EVENT) {
+        switch(id) {
+            case OTA_FW_EVENT_UPDATE_FINISH:
+                m_context.request_restart = 2;
+                // m_app_ctx.next_screen = CUR_SCREEN_NONE;
+            /* fall through */
+            case OTA_FW_EVENT_UPDATE_FAILED:
+                m_context.firmware_update_started = 0;
+                if(!m_context.request_restart)
+                    adc_resume_events("FW update finished");
+                goto refresh;
+                break;
+            case OTA_FW_EVENT_UPDATE_START:
+                adc_suppress_events("FW update started");
+                m_context.firmware_update_started = 1;
+                m_app_ctx.next_screen = CUR_SCREEN_FW_UPDATE;
+                refresh:
+                FUNC_ENTRY_ARGS(TAG, " %s", ota_fw_event_strings(id));
+    #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
+                if(no_auto_refresh && display_task_is_paused()){
+                    display_task_resume_for_times(2, -1, -1, false);
+                }
+    #endif
+                break;
+            default:
+                break;
+        }
+    } 
+}
+
 #if defined(CONFIG_OTA_USE_AUTO_UPDATE)
 static void ota_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data) {
     uint8_t no_auto_refresh = m_app_ctx.config ? !m_app_ctx.screen_auto_refresh : 0;
     if(base == OTA_AUTO_EVENT) {
-        const char * c =  "OTA_UNKNOWN_EVENT";
         switch(id) {
             case OTA_AUTO_EVENT_UPDATE_FINISH:
-                ILOG(TAG, "[%s] ota %s", __FUNCTION__, id < 4 ? ota_auto_event_strings[id] : c);
-                if(!m_context.request_restart) {
-                    m_app_ctx.next_screen = CUR_SCREEN_NONE;
-                    goto refresh;
-                }
-                break;
+                m_context.request_restart = 2;
+                // if(!m_context.request_restart) {
+                //     m_app_ctx.next_screen = CUR_SCREEN_NONE;
+                // }
+                /* Fall through */
             case OTA_AUTO_EVENT_UPDATE_FAILED:
-               ILOG(TAG, "[%s] ota %s", __FUNCTION__, id < 4 ? ota_auto_event_strings[id] : c);
+                m_context.firmware_update_started = 0;
+                if(!m_context.request_restart)
+                    adc_resume_events("FW update finished");
                 goto refresh;
                 break;
             case OTA_AUTO_EVENT_UPDATE_START:
-                ILOG(TAG, "[%s] ota %s", __FUNCTION__, id < 4 ? ota_auto_event_strings[id] : c);
+                m_context.firmware_update_started = 1;
+                /* fall through */
+            case OTA_AUTO_EVENT_UPDATE_AVAILABLE:
+                if(id == OTA_AUTO_EVENT_UPDATE_AVAILABLE)
+                    m_context.firmware_update_started = 2;
+                adc_suppress_events("FW update started");
                 m_app_ctx.next_screen = CUR_SCREEN_FW_UPDATE;
                 refresh:
+                FUNC_ENTRY_ARGS(TAG, " %s", ota_auto_event_strings(id));
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
                 if(no_auto_refresh && display_task_is_paused()){
                     display_task_resume_for_times(2, -1, -1, false);
                 }
 #endif
                 break;
-
             default:
-                // ILOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
                 break;
         }
     } 
 }
+#endif
 #endif
 
 static void logger_event_handler(void *handler_args, esp_event_base_t base, int32_t id, void *event_data) {
@@ -1251,24 +1298,24 @@ static void logger_cfg_event_handler(void *handler_args, esp_event_base_t base, 
     if(base == LOGGER_CONFIG_EVENT) {
         switch(id) {
             case LOGGER_CONFIG_EVENT_CFG_CHANGED:
-                ILOG(TAG, "[%s] g %s d %hhu", __FUNCTION__, logger_config_event_strings[id], *((uint8_t*)event_data));
+                FUNC_ENTRY_ARGS(TAG, " %s, save %hhu", logger_config_event_strings(id), *((uint8_t*)event_data));
                 break;
             case LOGGER_CONFIG_EVENT_CFG_SET:
-                ILOG(TAG, "[%s] g %s d %hhu", __FUNCTION__, logger_config_event_strings[id], *((uint8_t*)event_data));
+                FUNC_ENTRY_ARGS(TAG, " %s, save %hhu", logger_config_event_strings(id), *((uint8_t*)event_data));
                 config_save_json(m_app_ctx.config);
                 break;
-#if (C_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL <= LOG_INFO_NUM) // 2 - info
             case LOGGER_CONFIG_EVENT_CFG_GET:
-                ILOG(TAG, "[%s] c %s", __FUNCTION__, logger_config_event_strings[id]);
+                FUNC_ENTRY_ARGS(TAG, " %s", logger_config_event_strings(id));
                 break;
             case LOGGER_CONFIG_EVENT_INIT_DONE:
-                ILOG(TAG, "[%s] c %s", __FUNCTION__, logger_config_event_strings[id]);
+                FUNC_ENTRY_ARGS(TAG, " %s", logger_config_event_strings(id));
                 break;
             case LOGGER_CONFIG_EVENT_SAVE_DONE:
-                ILOG(TAG, "[%s] c %s", __FUNCTION__, logger_config_event_strings[id]);
+                FUNC_ENTRY_ARGS(TAG, " %s", logger_config_event_strings(id));
                 break;
             case LOGGER_CONFIG_EVENT_SAVE_FAIL:
-                ILOG(TAG, "[%s] c %s", __FUNCTION__, logger_config_event_strings[id]);
+                FUNC_ENTRY_ARGS(TAG, " %s", logger_config_event_strings(id));
                 break;
 #endif
             default:
@@ -1295,7 +1342,7 @@ static void ubx_event_handler(void *handler_args, esp_event_base_t base, int32_t
             case UBX_EVENT_SETUP_DONE:
             case UBX_EVENT_SETUP_FAIL:
                 refresh:
-                ILOG(TAG, "[%s] u %s", __FUNCTION__, ubx_event_strings(id));
+                FUNC_ENTRY_ARGS(TAG, " %s", ubx_event_strings(id));
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
                 if(no_auto_refresh && display_task_is_paused()){
                     display_task_resume_for_times(1, -1, -1, false);
@@ -1316,26 +1363,20 @@ static void gps_log_event_handler(void *handler_args, esp_event_base_t base, int
         uint8_t *a = (uint8_t*)event_data;
         switch(id) {
             case GPS_LOG_EVENT_GPS_NAV_MODE_CHANGED:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] g %s", __FUNCTION__, gps_log_event_strings(id));
-#endif
-#if (C_LOG_LEVEL < 3)
+                FUNC_ENTRY_ARGS(TAG, " %s", gps_log_event_strings(id));
+#if (C_LOG_LEVEL <= LOG_INFO_NUM) // 2 - info
                 gps_log_nav_mode_change(&m_context.gps, 1);
 #endif
                 break;
             case GPS_LOG_EVENT_LOG_FILES_OPENED:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] g %s", __FUNCTION__, gps_log_event_strings(id));
-#endif
+                FUNC_ENTRY_ARGS(TAG, " %s", gps_log_event_strings(id));
                 m_context.Shut_down_Save_session = true;
                 goto printfiles;
                 break;
             case GPS_LOG_EVENT_LOG_FILES_OPEN_FAILED:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] g %s", __FUNCTION__, gps_log_event_strings(id));
-#endif
+                FUNC_ENTRY_ARGS(TAG, " %s", gps_log_event_strings(id));
                 printfiles:
-#if (C_LOG_LEVEL < 2)
+#if (C_LOG_LEVEL <= LOG_DEBUG_NUM) // 3 - debug
                 for(uint8_t i=0; i<SD_FD_END; i++) {
                     printf("** [%s] ", i==SD_GPX ? "GPX" : 
 #ifdef GPS_LOG_ENABLE_GPY
@@ -1354,40 +1395,28 @@ static void gps_log_event_handler(void *handler_args, esp_event_base_t base, int
 #endif
                 break;
             case GPS_LOG_EVENT_LOG_FILES_SAVED:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] g %s", __FUNCTION__, gps_log_event_strings(id));
-#endif
+                FUNC_ENTRY_ARGS(TAG, " %s", gps_log_event_strings(id));
                 break;
             case GPS_LOG_EVENT_LOG_FILES_CLOSED:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] g %s", __FUNCTION__, gps_log_event_strings(id));
-#endif
+                FUNC_ENTRY_ARGS(TAG, " %s", gps_log_event_strings(id));
                 break;
             case GPS_LOG_EVENT_GPS_SAVE_FILES:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] g %s", __FUNCTION__, gps_log_event_strings(id));
-#endif
+                FUNC_ENTRY_ARGS(TAG, " %s", gps_log_event_strings(id));
                 m_app_ctx.next_screen = CUR_SCREEN_SAVE_SESSION;
                 gps_save_rtc();
                 break;
             case GPS_LOG_EVENT_GPS_SHUT_DOWN_DONE:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] g %s", __FUNCTION__, gps_log_event_strings(id));
-#endif
+                FUNC_ENTRY_ARGS(TAG, " %s", gps_log_event_strings(id));
                 if(m_app_ctx.next_screen == CUR_SCREEN_SAVE_SESSION) {
                     m_app_ctx.next_screen = CUR_SCREEN_NONE;
                 }
                 break;
             case GPS_LOG_EVENT_GPS_REQUEST_RESTART:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] g %s", __FUNCTION__, gps_log_event_strings(id));
-#endif
-                m_context.request_restart = 1;
+                FUNC_ENTRY_ARGS(TAG, " %s", gps_log_event_strings(id));
+                m_context.request_restart = 2;
                 break;
             case GPS_LOG_EVENT_GPS_IS_MOVING:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] g %s", __FUNCTION__, gps_log_event_strings(id));
-#endif
+                FUNC_ENTRY_ARGS(TAG, " %s", gps_log_event_strings(id));
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
                 if(!m_app_ctx.screen_auto_refresh) {
                     display_task_resume();
@@ -1395,9 +1424,7 @@ static void gps_log_event_handler(void *handler_args, esp_event_base_t base, int
 #endif
                 break;
             case GPS_LOG_EVENT_GPS_IS_STOPPING:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] g %s", __FUNCTION__, gps_log_event_strings(id));
-#endif
+                FUNC_ENTRY_ARGS(TAG, " %s", gps_log_event_strings(id));
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
                 if(!m_app_ctx.screen_auto_refresh) {
                     display_start_task_pause_seq();
@@ -1406,9 +1433,7 @@ static void gps_log_event_handler(void *handler_args, esp_event_base_t base, int
 #endif
                 break;
             case GPS_LOG_EVENT_GPS_FIRST_FIX:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] g %s", __FUNCTION__, gps_log_event_strings(id));
-#endif
+                FUNC_ENTRY_ARGS(TAG, " %s", gps_log_event_strings(id));
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
                 if(!m_app_ctx.screen_auto_refresh && display_task_is_paused()) {
                     display_task_resume_for_times(1, -1, -1, true);
@@ -1416,22 +1441,16 @@ static void gps_log_event_handler(void *handler_args, esp_event_base_t base, int
 #endif
                 break;
             case GPS_LOG_EVENT_GPS_NEW_RUN:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] g %s", __FUNCTION__, gps_log_event_strings(id));
-#endif
+                FUNC_ENTRY_ARGS(TAG, " %s", gps_log_event_strings(id));
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
                 display_cancel_delay();
 #endif
                 break;
             case GPS_LOG_EVENT_CFG_CHANGED:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] g %s d %hhu", __FUNCTION__, gps_log_event_strings(id), *((uint8_t*)event_data));
-#endif
+                FUNC_ENTRY_ARGS(TAG, " %s d %hhu", gps_log_event_strings(id), *((uint8_t*)event_data));
                 break;
             case GPS_LOG_EVENT_CFG_SET:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] g %s d %hhu", __FUNCTION__, gps_log_event_strings(id), *((uint8_t*)event_data));
-#endif
+                FUNC_ENTRY_ARGS(TAG, " %s, save %hhu", gps_log_event_strings(id), *((uint8_t*)event_data));
                 struct gps_user_cfg_evt_data_s * evt_data = event_data;
                 if(evt_data->pos == gps_cfg_timezone) {
                     struct tm tm;
@@ -1462,29 +1481,21 @@ static void adc_event_handler(void *handler_args, esp_event_base_t base, int32_t
                 if (event_data) {
                     float voltage = *(float*)event_data;
                     m_context_rtc.RTC_voltage_bat = voltage;
-#if (C_LOG_LEVEL < 4)
                     DLOG(TAG, "[%s] ADC voltage updated to %.2fV", __FUNCTION__, voltage);
-#endif
                 }
                 break;
             case ADC_EVENT_BATTERY_LOW:
             case ADC_EVENT_BATTERY_CRITICAL:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] %s", __FUNCTION__, adc_event_strings(id));
-#endif          
+                FUNC_ENTRY_ARGS(TAG, " %s", adc_event_strings(id));
                 // ADC module manages charge_state - no need to duplicate in main
                 goto refresh;
                 break;
             case ADC_EVENT_BATTERY_HIGH:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] %s, no action", __FUNCTION__, adc_event_strings(id));
-#endif          
+                FUNC_ENTRY_ARGS(TAG, " %s, no action", adc_event_strings(id));
                 // ADC module manages charge_state - no need to duplicate in main
                 break;
             case ADC_EVENT_BATTERY_OK:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] %s", __FUNCTION__, adc_event_strings(id));
-#endif          
+                FUNC_ENTRY_ARGS(TAG, " %s", adc_event_strings(id));
                 // Battery is back to normal - ADC module manages state, just refresh display
                 adc_battery_state_t current_state = get_adc_state();
                 if (current_state == ADC_BATTERY_NORMAL) {
@@ -1492,22 +1503,20 @@ static void adc_event_handler(void *handler_args, esp_event_base_t base, int32_t
                 }
                 break;
             case ADC_EVENT_CHARGE_STARTED:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] %s", __FUNCTION__, adc_event_strings(id));
-#endif          
+                FUNC_ENTRY_ARGS(TAG, " %s", adc_event_strings(id));
                 if(m_app_ctx.app_mode == APP_MODE_BOOT) break;
                 // ADC module now manages charging_is_on flag internally
                 // ADC module manages charge_state - no need to duplicate in main
                 // No automatic app mode switching - only update charging state
+                printf("main: charging started, voltage: %.2fV\n", m_context_rtc.RTC_voltage_bat);
                 goto refresh;
                 break;
             case ADC_EVENT_CHARGE_STOPPED:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] %s", __FUNCTION__, adc_event_strings(id));
-#endif
+                FUNC_ENTRY_ARGS(TAG, " %s", adc_event_strings(id));
                 if(m_app_ctx.app_mode == APP_MODE_BOOT) break;
                 // ADC module now manages charging_is_on flag internally
                 // ADC module manages charge_state - no need to duplicate in main
+                printf("main: charging stopped, voltage: %.2fV\n", m_context_rtc.RTC_voltage_bat);
                 if (m_app_ctx.app_mode == APP_MODE_CHARGE) {
                     m_context.request_shutdown = 1;
                 } else {
@@ -1517,12 +1526,12 @@ static void adc_event_handler(void *handler_args, esp_event_base_t base, int32_t
             refresh:
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
                 if(no_auto_refresh && display_task_is_paused()){
-                    display_task_resume_for_times(3, -1, -1, false);
+                    display_task_resume_for_times(2, -1, -1, false);
                 }
 #endif
                 break;
             default:
-                ILOG(TAG, "[%s] %s:%" PRId32, __FUNCTION__, base, id);
+                FUNC_ENTRY_ARGS(TAG, " %s:%ld", base, id);
                 break;
         }
     }
@@ -1650,14 +1659,10 @@ static void ui_event_handler(void *handler_args, esp_event_base_t base, int32_t 
     if(base == UI_EVENT) {
         switch(id) {
             case UI_EVENT_FLUSH_START:
-#if (C_LOG_LEVEL < 3)
-                ILOG(TAG, "[%s] d %s", __FUNCTION__, ui_event_strings(id));
-#endif
+                FUNC_ENTRY_ARGS(TAG, " %s", ui_event_strings(id));
                 break;
             case UI_EVENT_FLUSH_DONE:
-#if (C_LOG_LEVEL < 2)
-                ILOG(TAG, "[%s] d %s flush_count:%lu buf_update_count:%lu", __FUNCTION__, ui_event_strings(id), display_get_flush_count(), display_get_buf_update_count());
-#endif
+                FUNC_ENTRY_ARGSD(TAG, " %s flush_count:%lu buf_update_count:%lu", ui_event_strings(id), display_get_flush_count(), display_get_buf_update_count());
                 break;
             default:
                 break;
@@ -1674,18 +1679,14 @@ static esp_err_t events_init() {
     }
     esp_err_t loop_err = esp_event_loop_create_default();
     if (loop_err != ESP_OK) {
-#if (C_LOG_LEVEL < 3)
         WLOG(TAG, "[%s] event loop create fail: %s", __FUNCTION__, esp_err_to_name(loop_err));
-#endif
         return loop_err;
     }
     s_event_loop_ready = true;
 
     esp_err_t err = register_event_handlers();
     if (err != ESP_OK) {
-#if (C_LOG_LEVEL < 3)
         WLOG(TAG, "[%s] event registration incomplete: %s", __FUNCTION__, esp_err_to_name(err));
-#endif
     }
     return err;
 }
@@ -1698,9 +1699,7 @@ static esp_err_t events_deinit() {
     unregister_event_handlers();
     esp_err_t err = esp_event_loop_delete_default();
     if (err != ESP_OK) {
-#if (C_LOG_LEVEL < 3)
         WLOG(TAG, "[%s] event loop delete fail: %s", __FUNCTION__, esp_err_to_name(err));
-#endif
     }
     s_event_loop_ready = false;
     return ESP_OK;
@@ -1708,7 +1707,7 @@ static esp_err_t events_deinit() {
 
 // observer like callback
 static void config_changed_cb(const char *key) {
-#if (C_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL <= LOG_INFO_NUM) // 2 - info
     ILOG(TAG, "[%s] %s", __FUNCTION__, key);
 #endif
     if(strcmp(key, "screen_rotation")==0 || strcmp(key, "board_logo")==0||strcmp(key, "sail_logo")==0||strcmp(key, "speed_unit")==0 || strcmp(key, "sleep_info")==0 || strcmp(key, "bat_view") == 0) {
@@ -1852,14 +1851,14 @@ static void setup(uint8_t initial) {
     delay_ms(INIT_DELAY_SHORT_MS);
 #endif
 
-#if (C_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL <= LOG_INFO_NUM) // 2 - info
     ILOG(TAG, "[%s] verbosity mode %d.", __FUNCTION__, C_LOG_LEVEL);
     ILOG(TAG, "[%s] %s", __FUNCTION__, "Init done");
 #endif
 }
 
 static void service_power_requests(void) {
-    const bool restart_requested = m_context.request_restart;
+    const bool restart_requested = (m_context.request_restart > 0);
     const bool shutdown_requested = m_context.request_shutdown;
 
     if (!restart_requested && !shutdown_requested) {
@@ -1867,7 +1866,7 @@ static void service_power_requests(void) {
     }
 
     if (restart_requested) {
-        if(m_app_ctx.app_mode == APP_MODE_CHARGE) {
+        if(m_app_ctx.app_mode == APP_MODE_CHARGE && m_context.request_restart < 2) {
             setup(0);
         }
         else
@@ -1904,28 +1903,26 @@ static void ensure_app_ready(void) {
     if (vfs_ctx.config_part == VFS_PART_MAX) {
         return;
     }
-#if (C_LOG_LEVEL < 2)
-    FUNC_ENTRY_ARGS(TAG, " config not loaded, do it as sdcard is initialized.");
-#endif
+    FUNC_ENTRY_ARGSD(TAG, " config not loaded, do it as sdcard is initialized.");
     ctx_load_cb();
 }
 
 static bool run_periodic_diagnostics(uint32_t loop_counter) {
     bool verbose = false;
-#if (C_LOG_LEVEL < 4)
-#if (C_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL <= LOG_WARN_NUM)
+#if (C_LOG_LEVEL <= LOG_INFO_NUM) // 2 - info
     const uint32_t diag_period = 50U;
 #else
     const uint32_t diag_period = 100U;
 #endif
     if ((loop_counter % diag_period) == 0U) {
         mem_info();
-#if (C_LOG_LEVEL < 2)
+#if (C_LOG_LEVEL <= LOG_DEBUG_NUM) // 3 - debug
         tasks_memory_info();
         task_top();
 #endif
         print_lv_mem_mon();
-#if (C_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL <= LOG_INFO_NUM) // 2 - info
         if(m_app_ctx.app_mode == APP_MODE_GPS && m_context.gps.ubx_device) {
             struct ubx_msg_s *ubxMessage = &m_context.gps.ubx_device->ubx_msg;
             if(ubxMessage->navPvt.valid) {
@@ -2006,8 +2003,6 @@ static void cleanup(void) {
         m_app_ctx.config = NULL;
         m_app_ctx.config_initialized = 0;
     }
-    vfs_deinit();
-    // esp_timer_stop(screen_periodic_timer);
 #if defined(CONFIG_LOGGER_ADC_ENABLED)
     if(get_adc_charging_state()) {
         // Battery voltage is maintained by ADC timer automatically
@@ -2015,11 +2010,15 @@ static void cleanup(void) {
         ILOG(TAG, "[%s] charging is on, go to charge mode.", __FUNCTION__);
         return;
     }
-    adc_deinit();  // This now cleans up all ADC resources including low battery timer
 #endif
+    // esp_timer_stop(screen_periodic_timer);
 #if defined(CONFIG_DISPLAY_ENABLED)
     lcd_deinit();
 #endif
+#if defined(CONFIG_LOGGER_ADC_ENABLED)
+    adc_deinit();  // This now cleans up all ADC resources including low battery timer
+#endif
+    vfs_deinit();
 #if defined(CONFIG_LOGGER_BUTTON_ENABLED)
     deinit_button();
 #endif

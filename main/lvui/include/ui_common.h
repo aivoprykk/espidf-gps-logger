@@ -337,6 +337,12 @@ typedef lv_style_t* lv_style_ptr_t;
 
 // extern lv_obj_t * ui_StatusPanel;
 
+typedef struct {
+    bool has_status;
+    bool status_changed;
+    uint16_t wait_time_ms;
+} ui_screen_status_t;
+
 void ui_init(void);
 void ui_deinit();
 
@@ -360,20 +366,18 @@ int ui_SpeedScreen_screen_init(void);
 int ui_InfoScreen_screen_init(int rows);
 
 // SCREEN: ui_InitScreen
-int ui_InitScreen_screen_init(void);
+int ui_InitScreen_screen_init(int reload);
 
 // SCREEN: ui_RecordScreen
-void ui_RecordScreen_screen_init(void);
+int ui_RecordScreen_screen_init(void);
 
 // SCREEN: ui_StatsScreen
-void ui_StatsScreen_screen_init(int rows, int cols);
+int ui_StatsScreen_screen_init(int rows, int cols);
 
 // SCREEN: ui_SleepScreen
-void ui_SleepScreen_screen_init(void);
+int ui_SleepScreen_screen_init(void);
 
-void ui_BlankScreen_screen_init(void);
-
-void loadSleepScreen();
+int ui_BlankScreen_screen_init(void);
 
 typedef enum info_scr_mode_e {
     INFO_MODE_NONE = 0,
@@ -384,11 +388,9 @@ typedef enum info_scr_mode_e {
     INFO_MODE_SAVE_SESSION,
 } info_scr_mode_t;
 
-int loadInfoScreen(info_scr_mode_t mode);
 int set_label_text_safe(lv_obj_t * lbl, const char * title, uint8_t enable_hide_lbl);
 int set_screen_img(lv_obj_t * scr, const lv_img_dsc_t *img_src, uint16_t angle);
 int invert_colors(lv_obj_t * panel, bool invert);
-void loadRecordScreen();
 
 typedef enum init_scr_mode_e {
     INIT_MODE_NONE = 0,
@@ -403,30 +405,34 @@ typedef enum init_scr_mode_e {
 
 const lv_font_t * get_speed_title_font();
 
-int loadInitScreen(init_scr_mode_t mode);
-int loadSpeedScreen(void);
-void loadStatsScreen(int rows, int cols);
-void loadBlankScreen(uint8_t invert);
+int loadSleepScreen(ui_screen_status_t *status);
+int loadInfoScreen(info_scr_mode_t mode, ui_screen_status_t *status);
+int loadRecordScreen(ui_screen_status_t *status);
+int loadInitScreen(init_scr_mode_t mode, ui_screen_status_t *status);
+int loadSpeedScreen(ui_screen_status_t *status);
 
-void showFwUpdateScreen(const char * title, const char * info, const char * desc);
-void showSleepScreen(void);
-void showLowBatScreen(const char * title);
-int showWifiScreen(void);
-void showBootScreen(const char * title);
-int showGpsScreen(uint16_t angle);
-void showGpsTroubleScreen();
-void showSdTroubleScreen();
-void showSaveSessionScreen(const char * title, const char * info, const char * desc);
-int showSpeedScreen();
-void showStatsScreen();
-void showStatsScreen12();
-void showStatsScreen22();
-void showStatsScreen32();
-void showChargeScreen(int mode, const char * title);
-void showPushScreen(int push, const char * title);
-void showRecordScreen(bool invert_colors);
-void showSettingsScreen(const char * title, const char * info, const char * desc);
-void showBlankScreen(uint8_t invert);
+int loadStatsScreen(int rows, int cols, ui_screen_status_t *status);
+int loadBlankScreen(uint8_t invert, ui_screen_status_t *status);
+
+int showFwUpdateScreen(const char * title, const char * info, const char * desc, ui_screen_status_t *status);
+int showSleepScreen(ui_screen_status_t *status);
+int showLowBatScreen(const char * title, ui_screen_status_t *status);
+int showWifiScreen(ui_screen_status_t *status);
+int showBootScreen(const char * title, ui_screen_status_t *status);
+int showGpsScreen(uint16_t angle, ui_screen_status_t *status);
+int showGpsTroubleScreen(ui_screen_status_t *status);
+int showSdTroubleScreen(ui_screen_status_t *status);
+int showSaveSessionScreen(const char * title, const char * info, const char * desc, ui_screen_status_t *status);
+int showSpeedScreen(ui_screen_status_t *status);
+int showStatsScreen(ui_screen_status_t *status);
+int showStatsScreen12(ui_screen_status_t *status);
+int showStatsScreen22(ui_screen_status_t *status);
+int showStatsScreen32(ui_screen_status_t *status);
+int showChargeScreen(int mode, const char * title, ui_screen_status_t *status);
+int showPushScreen(int push, const char * title, ui_screen_status_t *status);
+int showRecordScreen(bool invert_colors, ui_screen_status_t *status);
+int showSettingsScreen(const char * title, const char * info, const char * desc, ui_screen_status_t *status);
+int showBlankScreen(uint8_t invert, ui_screen_status_t *status);
 
 void ui_flush_screens(ui_screen_t * screen);
 void ui_invalidate_screens(void);

@@ -231,7 +231,8 @@ static void unload(void) {
     }
 }
 
-void ui_StatsScreen_screen_init(int rows, int cols) {
+int ui_StatsScreen_screen_init(int rows, int cols) {
+    int ret = 0;
     if (!ui_stats_screen.screen.self){
         ui_stats_screen.screen.has_status_cnt = 1;
         // ui_stats_screen.screen.status_viewmode = STATUS_VIEWMODE_DEFAULT;
@@ -248,8 +249,10 @@ void ui_StatsScreen_screen_init(int rows, int cols) {
         ui_stats_screen.rows = rows;
         ui_stats_screen.cols = cols;
         ui_stats_screen.screen.main_cnt = load(ui_stats_screen.screen.self);
+        ret = 1;
     }
     lv_obj_set_x(ui_stats_screen.screen.main_cnt, lv_pct(ui_stats_screen.screen.main_cnt_offset));
     ui_status_panel_load(&ui_stats_screen.screen, STATUS_VIEWMODE_DEFAULT);
     update_dims();
+    return ret;
 }

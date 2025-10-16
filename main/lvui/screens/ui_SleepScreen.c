@@ -177,7 +177,8 @@ static void unload() {
     }
 }
 
-void ui_SleepScreen_screen_init(void) {
+int ui_SleepScreen_screen_init(void) {
+    int ret = 0;
     if(!ui_sleep_screen.screen.self) {
         ui_sleep_screen.screen.has_status_cnt = 1;
         // ui_sleep_screen.screen.status_viewmode = STATUS_VIEWMODE_SLEEP;
@@ -187,8 +188,11 @@ void ui_SleepScreen_screen_init(void) {
         ui_common_screen_init(&ui_sleep_screen.screen);
     }
     ui_flush_screens(&ui_sleep_screen.screen);
-    if(ui_sleep_screen.screen.main_cnt == NULL)
+    if(ui_sleep_screen.screen.main_cnt == NULL) {
         ui_sleep_screen.screen.main_cnt = load(ui_sleep_screen.screen.self);
+        ret = 1;
+    }
     ui_status_panel_load(&ui_sleep_screen.screen, STATUS_VIEWMODE_SLEEP);
     update_dims();
+    return ret;
 }

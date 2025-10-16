@@ -39,7 +39,8 @@ static void unload(void) {
     ui_record_screen.info_lbl = 0;
 }
 
-void ui_RecordScreen_screen_init(void) {
+int ui_RecordScreen_screen_init(void) {
+    int ret = 0;
     if(!ui_record_screen.screen.self){
         ui_record_screen.screen.load = load;
         ui_record_screen.screen.unload = unload;
@@ -47,6 +48,9 @@ void ui_RecordScreen_screen_init(void) {
         ui_common_screen_init(&ui_record_screen.screen);
     }
     ui_flush_screens(&ui_record_screen.screen);
-    if(ui_record_screen.screen.main_cnt == 0)
+    if(ui_record_screen.screen.main_cnt == 0) {
         ui_record_screen.screen.main_cnt = load(ui_record_screen.screen.self);
+        ret = 1;
+    }
+    return ret;
 }

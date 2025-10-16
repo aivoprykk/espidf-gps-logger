@@ -13,6 +13,14 @@ set(INCS
 "${CMAKE_BINARY_DIR}/config"
 "."
 )
+# Determine partition CSV: prefer board-specific Kconfig options when available
+if(CONFIG_HAS_BOARD_LILYGO_EPAPER_T5_16MB_FLASH)
+    set(PARTITION_CSV "${CMAKE_SOURCE_DIR}/two_ota_large_16m.csv")
+elseif(CONFIG_HAS_BOARD_LILYGO_T_DISPLAY_S3)
+    set(PARTITION_CSV "${CMAKE_SOURCE_DIR}/two_ota_large_s3.csv")
+else()
+    set(PARTITION_CSV "${CMAKE_SOURCE_DIR}/two_ota_large.csv")
+endif()
 
 if(CONFIG_BMX_ENABLE)
 set(srcs ${srcs} bmx.c)
@@ -84,7 +92,7 @@ else()
 set(fdir ${pdir}/flash_data)
 endif()
 if(EXISTS ${fdir})
-file(READ ${pdir}/${CONFIG_PARTITION_TABLE_CUSTOM_FILENAME} PARTS)
+    file(READ ${PARTITION_CSV} PARTS)
 if(CONFIG_USE_FATFS)
 string(REGEX MATCH "[^#]${CONFIG_FATFS_PARTITION_LABEL}" HAVE_FATFS_PART ${PARTS})
 if(NOT ${HAVE_FATFS_PART} EQUAL -1)

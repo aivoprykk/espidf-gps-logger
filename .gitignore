@@ -12,3 +12,8 @@ dependencies.lock
 .old
 version.txt
 sdkconfig*
+*.bin
+*.elf
+*.map
+*.log
+.ccls-cache

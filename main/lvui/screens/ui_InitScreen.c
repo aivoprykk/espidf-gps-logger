@@ -41,7 +41,7 @@ static void unload(void) {
     ui_init_screen.init_img = 0;
 }
 
-int ui_InitScreen_screen_init(void) {
+int ui_InitScreen_screen_init(int reload) {
     int ret = 0;
     if(!ui_init_screen.screen.self){
         ui_init_screen.screen.load = load;
@@ -50,6 +50,7 @@ int ui_InitScreen_screen_init(void) {
         ui_common_screen_init(&ui_init_screen.screen);
     }
     ui_flush_screens(&ui_init_screen.screen);
+    if(reload) unload();
     if(ui_init_screen.screen.main_cnt == 0) {
         ui_init_screen.screen.main_cnt = load(ui_init_screen.screen.self);
         ret = 1;

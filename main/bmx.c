@@ -18,7 +18,7 @@ static const char *TAG = "bm.280";
 #define BMX_INTERVAL_SEC 10
 
 static esp_err_t bmx_read() {
-    MEAS_START();
+    IMEAS_START();
     esp_err_t err = ESP_OK;
     const char * last_err = 0;
     bmx_stat.millis = get_millis();
@@ -39,12 +39,12 @@ static esp_err_t bmx_read() {
 //done:
 #if (C_LOG_LEVEL < 2)
     if(bmx_stat.status!=0) {
-        ESP_LOGE(TAG, "Bmx280 %s failed: %s ", bmx_stat.status==-10?"set_mode force":bmx_stat.status==-11?"read":"set_mode sleep", last_err);
+        ELOG(TAG, "Bmx280 %s failed: %s ", bmx_stat.status==-10?"set_mode force":bmx_stat.status==-11?"read":"set_mode sleep", last_err);
     } else {
-        ESP_LOGI(TAG, "Bmx280 Values: temp = %" PRId32 ", pres = %" PRIu32 ", hum = %" PRIu32 ", elapsed = %" PRIu32, bmx_stat.temp, bmx_stat.press, bmx_stat.humid, bmx_stat.elapsed);
+        ILOG(TAG, "Bmx280 Values: temp = %" PRId32 ", pres = %" PRIu32 ", hum = %" PRIu32 ", elapsed = %" PRIu32, bmx_stat.temp, bmx_stat.press, bmx_stat.humid, bmx_stat.elapsed);
     }
 #endif
-    MEAS_END(TAG, "[%s] took %llu ms", __func__);
+    IMEAS_END(TAG);
     return err;
 }
 
@@ -57,9 +57,7 @@ static void periodic_timer_callback(void *arg) {
 }
 
 esp_err_t init_bmx() {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __FUNCTION__);
-#endif
+    FUNC_ENTRY(TAG);
     if(bmx_stat.initialized) return ESP_OK;
     esp_err_t ret = ESP_OK;
     i2c_config_t i2c_cfg = {
@@ -71,30 +69,30 @@ esp_err_t init_bmx() {
         .master.clk_speed = 100000};
     ret = i2c_param_config(I2C_NUM_0, &i2c_cfg);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "i2c_param_config failed: %s", esp_err_to_name(ret));
+        ELOG(TAG, "i2c_param_config failed: %s", esp_err_to_name(ret));
         bmx_stat.status = -5;
     }
     ret = i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "i2c_driver_install failed: %s", esp_err_to_name(ret));
+        ELOG(TAG, "i2c_driver_install failed: %s", esp_err_to_name(ret));
         bmx_stat.status = -6;
     }
     bmx280 = bmx280_create(I2C_NUM_0);
 
     if (!bmx280) {
-        ESP_LOGE("test", "Could not create bmx280 driver.");
+        ELOG("test", "Could not create bmx280 driver.");
         bmx_stat.status = -2;
     }
 
     ret = bmx280_init(bmx280);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "i2c_driver_install failed: %s", esp_err_to_name(ret));
+        ELOG(TAG, "i2c_driver_install failed: %s", esp_err_to_name(ret));
         bmx_stat.status = -3;
     }
     bmx280_config_t bmx_cfg = BMX280_DEFAULT_CONFIG;
     ret = bmx280_configure(bmx280, &bmx_cfg);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "i2c_driver_install failed: %s", esp_err_to_name(ret));
+        ELOG(TAG, "i2c_driver_install failed: %s", esp_err_to_name(ret));
         bmx_stat.status = -4;
     }
     if (!bmx_stat.status) {
@@ -106,7 +104,7 @@ esp_err_t init_bmx() {
         if(!esp_timer_create(&periodic_timer_args, &bmx_periodic_timer))
             esp_timer_start_periodic(bmx_periodic_timer, SEC_TO_US(10)); // 10s
         else {
-            ESP_LOGE(TAG, "[%s] Failed to create periodic timer", __func__);
+            ELOG(TAG, "[%s] Failed to create periodic timer", __func__);
         }
         //xTaskCreatePinnedToCore(bmx_task, "bmx_task", BMX_TASK_STACK_SIZE, NULL, 0, &t1, 1);
     }
