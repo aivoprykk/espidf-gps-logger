@@ -37,7 +37,7 @@ static esp_err_t bmx_read() {
     }
     bmx280_setMode(bmx280, BMX280_MODE_SLEEP);
 //done:
-#if (C_LOG_LEVEL < 2)
+#if (C_LOG_LEVEL <= LOG_DEBUG_NUM)
     if(bmx_stat.status!=0) {
         ELOG(TAG, "Bmx280 %s failed: %s ", bmx_stat.status==-10?"set_mode force":bmx_stat.status==-11?"read":"set_mode sleep", last_err);
     } else {

@@ -22,7 +22,7 @@ const lv_img_dsc_t * img_full_p = &speed_raw_200x200;
 #endif
 
 static void update_bat(uint8_t verbose) {
-    voltage_bat = volt_read();
+    voltage_bat = adc_get_cached_batt_volt();
 #if defined(DEBUG)
     if (verbose)
         ESP_LOGI(TAG, "[%s] Battery measured (computed:%.02f, required_min:%.02f)\n", __FUNCTION__, voltage_bat, MINIMUM_VOLTAGE);
@@ -188,7 +188,7 @@ uint32_t screen_cb(void* arg) {
     }
     else if(count == SLEEP_SCREEN) {
         ESP_LOGI(TAG, "load sleep screen");
-        showSleepScreen();
+        showSleepScreen(0);
         ui_status_panel_t * statusbar = &ui_status_panel;
         lv_label_set_text(statusbar->time_label, "12:00 2024-01-01");
         lv_label_set_text(statusbar->bat_label, "97%");
@@ -202,15 +202,15 @@ uint32_t screen_cb(void* arg) {
     }
     else if (count == RECORD_SCREEN) {
         ESP_LOGI(TAG, "load record screen");
-        showRecordScreen(0);
+        showRecordScreen(0, 0);
     }
     else if(count == BOOT_SCREEN) {
         ESP_LOGI(TAG, "load boot screen");
-         showBootScreen("Booting");
+         showBootScreen("Booting", 0);
     }
     else if(count == GPS_SCREEN) {
         ESP_LOGI(TAG, "load gps screen");
-        showGpsScreen(0);
+        showGpsScreen(0, 0);
         set_label_text_safe(ui_info_screen.info_rows[0], "GPS", 0);
         set_label_text_safe(ui_info_screen.info_rows[1], "gps data row 1", 0);
         set_label_text_safe(ui_info_screen.info_rows[2], "gps data row 2", 0);
@@ -218,7 +218,7 @@ uint32_t screen_cb(void* arg) {
     }
     else if(count == SPEED_SCREEN){
         ESP_LOGI(TAG, "load speed screen");
-        showSpeedScreen();
+        showSpeedScreen(0);
         ui_status_panel_t * statusbar = &ui_status_panel;
         f2_to_char(voltage_bat, p);
         lv_label_set_text(statusbar->bat_label, p);
@@ -241,7 +241,7 @@ uint32_t screen_cb(void* arg) {
     
     else if(count == STATS_SCREEN_3x1) {
         ESP_LOGI(TAG, "load stats screen");
-        loadStatsScreen(3,1);
+        loadStatsScreen(3,1, 0);
         f2_to_char(last_speed, p);
         lv_label_set_text(ui_stats_screen.cells[0][0].title, p);
         lv_label_set_text(ui_stats_screen.cells[0][0].info, "500M");
@@ -249,7 +249,7 @@ uint32_t screen_cb(void* arg) {
 
     else if(count == STATS_SCREEN_2x2) {
         ESP_LOGI(TAG, "load stats screen");
-        loadStatsScreen(2,2);
+        loadStatsScreen(2,2, 0);
         f2_to_char(last_speed, p);
         lv_label_set_text(ui_stats_screen.cells[0][0].title, p);
         lv_label_set_text(ui_stats_screen.cells[0][0].info, "MILE");
@@ -257,7 +257,7 @@ uint32_t screen_cb(void* arg) {
 
     else if(count == STATS_SCREEN_3x2) {
         ESP_LOGI(TAG, "load stats screen");
-        loadStatsScreen(3,2);
+        loadStatsScreen(3,2, 0);
         f2_to_char(last_speed, p);
         lv_label_set_text(ui_stats_screen.cells[0][0].title, p);
         lv_label_set_text(ui_stats_screen.cells[0][0].info, "AVG");
@@ -265,11 +265,11 @@ uint32_t screen_cb(void* arg) {
 
     else if(count == GPS_TROUBLE_SCREEN) {
         ESP_LOGI(TAG, "load gps trouble screen");
-        showGpsTroubleScreen();
+        showGpsTroubleScreen(0);
     }
     else if(count == LOW_BAT_SCREEN) {
         ESP_LOGI(TAG, "load low battery screen");
-         showLowBatScreen(0);
+         showLowBatScreen(0, 0);
     }
     else if(count == BLANK_SCREEN) {
         ESP_LOGI(TAG, "load blank screen");
@@ -299,9 +299,7 @@ uint32_t screen_cb(void* arg) {
 }
 
 void init_button() {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __func__);
-#endif
+    FUNC_ENTRY(TAG);
     button_init();
     btns[0].cb = button_cb;
 #if defined(CONFIG_LOGGER_BUTTON_GPIO_1)
@@ -316,9 +314,7 @@ void init_button() {
 }
 
 void deinit_button() {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __func__);
-#endif
+    FUNC_ENTRY(TAG);
     button_deinit();
     if (refreshing_sem) {
         vSemaphoreDelete(refreshing_sem);

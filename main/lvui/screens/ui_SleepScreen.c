@@ -160,9 +160,6 @@ static lv_obj_t *load(lv_obj_t *parent) {
 }
 
 static void unload() {
-#if (C_LOG_LEVEL < 1)
-    printf("[%s] ui_sleep_screen main_cnt\n", __func__);
-#endif
     if(ui_sleep_screen.screen.main_cnt == NULL) return;
     lv_obj_clean(ui_sleep_screen.screen.main_cnt);
     lv_obj_del(ui_sleep_screen.screen.main_cnt);

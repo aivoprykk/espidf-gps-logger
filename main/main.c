@@ -303,7 +303,7 @@ static void unregister_event_handlers(void) {
 }
 
 static void configure_sleep_wakeup_sources(uint64_t sleep_time, bool enable_ext0, bool enable_ulp) {
-    FUNC_ENTRY_ARGS(TAG, " sleep_time=%llu, ext0=%d, ulp=%d", sleep_time, enable_ext0, enable_ulp);
+    FUNC_ENTRY(TAG);
 
     // Always disable all wakeup sources first to avoid conflicts
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
@@ -311,21 +311,18 @@ static void configure_sleep_wakeup_sources(uint64_t sleep_time, bool enable_ext0
     // Configure timer wakeup if specified
     if (sleep_time > 0) {
         esp_sleep_enable_timer_wakeup(SEC_TO_US(sleep_time));
-        FUNC_ENTRY_ARGS(TAG, "Enabled timer wakeup: %llu seconds", sleep_time);
+        FUNC_ENTRY_ARGSD(TAG, "Enabled timer wakeup: %llu seconds", sleep_time);
     }
     esp_err_t ret = 0;
 #if !defined(CONFIG_ULP_BUTTON_ENABLED) || (CONFIG_ULP_BUTTON_GPIO != WAKE_UP_GPIO)  || !defined(CONFIG_LOGGER_ADC_ENABLED) || !defined(CONFIG_ULP_COPROC_ENABLED)
-    // Configure EXT0/EXT1 wakeup (button/reed switch)
-    // NOTE: When ULP button monitoring is enabled, EXT wakeup is disabled to avoid conflicts
     if (enable_ext0) {
-#if C_LOG_LEVEL <= LOG_INFO_NUM
+#if C_LOG_LEVEL <= LOG_DEBUG_NUM
         uint8_t ext_num = 0;
 #endif
-        // When ULP button monitoring is enabled, disable EXT wakeup - ULP handles button
         if (enable_ulp) {
 #if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
             ret = esp_sleep_enable_ext1_wakeup((1ULL << WAKE_UP_GPIO), 0);
-#if C_LOG_LEVEL <= LOG_INFO_NUM
+#if C_LOG_LEVEL <= LOG_DEBUG_NUM
             ext_num = 1;
 #endif
         } else {
@@ -333,13 +330,13 @@ static void configure_sleep_wakeup_sources(uint64_t sleep_time, bool enable_ext0
             ret = esp_sleep_enable_ext0_wakeup(WAKE_UP_GPIO, 0);
         }
         if (ret == ESP_OK) {
-            FUNC_ENTRY_ARGS(TAG, "Enabled EXT%d wakeup on GPIO %d", ext_num, WAKE_UP_GPIO);
+            FUNC_ENTRY_ARGSD(TAG, "Enabled EXT%d wakeup on GPIO %d", ext_num, WAKE_UP_GPIO);
         } else {
-            FUNC_ENTRY_ARGS(TAG, "Failed to enable EXT%d wakeup: %s", ext_num, esp_err_to_name(ret));
+            FUNC_ENTRY_ARGSD(TAG, "Failed to enable EXT%d wakeup: %s", ext_num, esp_err_to_name(ret));
         }
     }
 #else
-    FUNC_ENTRY_ARGS(TAG, "ULP button enabled - skipping EXT wakeup for GPIO %d", WAKE_UP_GPIO);
+    FUNC_ENTRY_ARGSD(TAG, "ULP button enabled - skipping EXT wakeup for GPIO %d", WAKE_UP_GPIO);
 #endif
     
     // Configure ULP wakeup (battery monitoring and button monitoring)  
@@ -350,7 +347,7 @@ static void configure_sleep_wakeup_sources(uint64_t sleep_time, bool enable_ext0
             ELOG(TAG, "Failed to enable ULP wakeup: %s", esp_err_to_name(err));
         } else {
 #ifdef CONFIG_ULP_BUTTON_ENABLED
-            FUNC_ENTRY_ARGS(TAG, "Enabled ULP wakeup for battery and button monitoring");
+            FUNC_ENTRY_ARGSD(TAG, "Enabled ULP wakeup for battery and button monitoring");
 #else
             FUNC_ENTRY_ARGS(TAG, "Enabled ULP wakeup for battery monitoring");
 #endif
@@ -359,10 +356,8 @@ static void configure_sleep_wakeup_sources(uint64_t sleep_time, bool enable_ext0
 #endif
     
     // Log all enabled wakeup sources for debugging
-#if (C_LOG_LEVEL <= LOG_INFO_NUM) // 2 - info
     FUNC_ENTRY_ARGS(TAG, "Sleep configured with wakeup sources: timer=%d, ext0=%d, ulp=%d", 
              sleep_time > 0, enable_ext0, enable_ulp);
-#endif
 }
 
 static void low_to_sleep(uint64_t sleep_time, bool enable_ext0, uint8_t enable_ulp) {
@@ -389,10 +384,10 @@ static void low_to_sleep(uint64_t sleep_time, bool enable_ext0, uint8_t enable_u
     
     // Enable ULP wakeup for battery monitoring if battery is low or critical
     // enable_ulp = false;
-    if (m_context_rtc.RTC_voltage_bat < (MINIMUM_VOLTAGE + 0.2f)) {
-        ILOG(TAG, "Battery low (%.2fV), enabling ULP monitoring during sleep", 
-                 m_context_rtc.RTC_voltage_bat);
-    }
+    // if (m_context_rtc.RTC_voltage_bat < (MINIMUM_VOLTAGE + 0.2f)) {
+    //     ILOG(TAG, "Battery low (%.2fV), enabling ULP monitoring during sleep", 
+    //              m_context_rtc.RTC_voltage_bat);
+    // }
     
     /* Force enable_ulp=true if resuming from ULP wake (or timer wake after ULP wake),
      * otherwise the ULP will stop monitoring and never wake again */
@@ -435,7 +430,6 @@ static void low_to_sleep(uint64_t sleep_time, bool enable_ext0, uint8_t enable_u
              adc_ulp_get_cycle_count(), ulp_was_running);
     }
 #endif
-    
     esp_deep_sleep(TO_M_UL(sleep_time));
 }
 
@@ -482,7 +476,7 @@ static wakeup_plan_t wakeup_init(void) {
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
 #if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
     if(wakeup_reason){
-        ILOG(TAG, "ULP enabled, Logging ULP ADC values");
+        // ILOG(TAG, "ULP enabled, Logging ULP ADC values");
         debug_ulp_status();
     }
     /* Update last_wake_status based on current wake source:
@@ -582,9 +576,9 @@ static wakeup_plan_t wakeup_init(void) {
     }
 
     if (plan.immediate_sleep) {
-        if (m_context_rtc.RTC_voltage_bat < MINIMUM_VOLTAGE) {
-            WLOG(TAG, "Battery critically low (%.2fV), going back to sleep with monitoring", m_context_rtc.RTC_voltage_bat);
-        }
+        // if (m_context_rtc.RTC_voltage_bat < MINIMUM_VOLTAGE) {
+        //     WLOG(TAG, "Battery critically low (%.2fV), going back to sleep with monitoring", m_context_rtc.RTC_voltage_bat);
+        // }
         m_app_ctx.app_mode = APP_MODE_SLEEP;
         plan.enable_ulp = start_ulp;
     }
@@ -786,9 +780,7 @@ static void wifi_deinit(void) {
 #if defined(CONFIG_LOGGER_WIFI_ENABLED)
 // WiFi mode change callback implementations
 void wifi_before_mode_change_callback(void) {
-#if (C_LOG_LEVEL <= LOG_DEBUG_NUM) // 3 - debug
-    ILOG(TAG, "[%s] WiFi mode change starting - suppressing ADC events & syncing config", __func__);
-#endif
+    DLOG(TAG, "[%s] WiFi mode change starting - suppressing ADC events & syncing config", __func__);
 #if defined CONFIG_LOGGER_ADC_ENABLED
     adc_suppress_events("WiFi mode change");
 #endif
@@ -971,9 +963,7 @@ void app_mode_wifi_handler(int verbose) {
     gps_shut_down();  // save gps
     
     if (!wifi_context.s_wifi_initialized) {
-#if (C_LOG_LEVEL <= LOG_DEBUG_NUM) // 3 - debug
-        ILOG(TAG, "[%s] first turn wifi on", __FUNCTION__);
-#endif
+        DLOG(TAG, "[%s] first turn wifi on", __FUNCTION__);
         wifi_ensure_callbacks_registered();
         wifi_init();
 #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(ENABLE_WIFI_AP_STA)
@@ -1416,6 +1406,7 @@ static void gps_log_event_handler(void *handler_args, esp_event_base_t base, int
                 m_context.request_restart = 2;
                 break;
             case GPS_LOG_EVENT_GPS_IS_MOVING:
+                adc_suppress_events("GPS is moving");
                 FUNC_ENTRY_ARGS(TAG, " %s", gps_log_event_strings(id));
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
                 if(!m_app_ctx.screen_auto_refresh) {
@@ -1424,11 +1415,12 @@ static void gps_log_event_handler(void *handler_args, esp_event_base_t base, int
 #endif
                 break;
             case GPS_LOG_EVENT_GPS_IS_STOPPING:
+                adc_resume_events("GPS is stopping");
                 FUNC_ENTRY_ARGS(TAG, " %s", gps_log_event_strings(id));
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
                 if(!m_app_ctx.screen_auto_refresh) {
                     display_start_task_pause_seq();
-                    // diswlay_task_resume_for_times(1, 1, -1, false);
+                    // display_task_resume_for_times(1, 1, -1, false);
                 }
 #endif
                 break;
@@ -1480,7 +1472,7 @@ static void adc_event_handler(void *handler_args, esp_event_base_t base, int32_t
                 // Update RTC voltage from ADC module event data - no display refresh needed for voltage updates
                 if (event_data) {
                     float voltage = *(float*)event_data;
-                    m_context_rtc.RTC_voltage_bat = voltage;
+                    // m_context_rtc.RTC_voltage_bat = voltage;
                     DLOG(TAG, "[%s] ADC voltage updated to %.2fV", __FUNCTION__, voltage);
                 }
                 break;
@@ -1508,7 +1500,7 @@ static void adc_event_handler(void *handler_args, esp_event_base_t base, int32_t
                 // ADC module now manages charging_is_on flag internally
                 // ADC module manages charge_state - no need to duplicate in main
                 // No automatic app mode switching - only update charging state
-                printf("main: charging started, voltage: %.2fV\n", m_context_rtc.RTC_voltage_bat);
+                // WLOG(TAG, "main: charging started, voltage: %.2fV", m_context_rtc.RTC_voltage_bat);
                 goto refresh;
                 break;
             case ADC_EVENT_CHARGE_STOPPED:
@@ -1516,7 +1508,7 @@ static void adc_event_handler(void *handler_args, esp_event_base_t base, int32_t
                 if(m_app_ctx.app_mode == APP_MODE_BOOT) break;
                 // ADC module now manages charging_is_on flag internally
                 // ADC module manages charge_state - no need to duplicate in main
-                printf("main: charging stopped, voltage: %.2fV\n", m_context_rtc.RTC_voltage_bat);
+                // WLOG(TAG, "main: charging stopped, voltage: %.2fV", m_context_rtc.RTC_voltage_bat);
                 if (m_app_ctx.app_mode == APP_MODE_CHARGE) {
                     m_context.request_shutdown = 1;
                 } else {
@@ -1707,9 +1699,7 @@ static esp_err_t events_deinit() {
 
 // observer like callback
 static void config_changed_cb(const char *key) {
-#if (C_LOG_LEVEL <= LOG_INFO_NUM) // 2 - info
-    ILOG(TAG, "[%s] %s", __FUNCTION__, key);
-#endif
+    FUNC_ENTRY_ARGS(TAG, "key: %s", key);
     if(strcmp(key, "screen_rotation")==0 || strcmp(key, "board_logo")==0||strcmp(key, "sail_logo")==0||strcmp(key, "speed_unit")==0 || strcmp(key, "sleep_info")==0 || strcmp(key, "bat_view") == 0) {
         g_context_rtc_add_config(&m_context_rtc, m_app_ctx.config);
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
@@ -1798,7 +1788,7 @@ static void setup(uint8_t initial) {
 #if defined(CONFIG_LOGGER_ADC_ENABLED)
     adc_init();  // This now automatically initializes ULP if available
     adc_set_low_battery_callback(on_low_battery_shutdown);  // Register shutdown callback
-    adc_set_minimum_battery_voltage(MINIMUM_VOLTAGE);       // Set voltage threshold
+    // adc_set_minimum_battery_voltage(MINIMUM_VOLTAGE);       // Set voltage threshold
     delay_ms(INIT_DELAY_MEDIUM_MS);
     
     // Additional delay to ensure ADC has time for initial readings before state check
@@ -1851,10 +1841,8 @@ static void setup(uint8_t initial) {
     delay_ms(INIT_DELAY_SHORT_MS);
 #endif
 
-#if (C_LOG_LEVEL <= LOG_INFO_NUM) // 2 - info
     ILOG(TAG, "[%s] verbosity mode %d.", __FUNCTION__, C_LOG_LEVEL);
     ILOG(TAG, "[%s] %s", __FUNCTION__, "Init done");
-#endif
 }
 
 static void service_power_requests(void) {
@@ -1909,12 +1897,8 @@ static void ensure_app_ready(void) {
 
 static bool run_periodic_diagnostics(uint32_t loop_counter) {
     bool verbose = false;
-#if (C_LOG_LEVEL <= LOG_WARN_NUM)
-#if (C_LOG_LEVEL <= LOG_INFO_NUM) // 2 - info
+#if (C_LOG_LEVEL <= LOG_INFO_NUM)
     const uint32_t diag_period = 50U;
-#else
-    const uint32_t diag_period = 100U;
-#endif
     if ((loop_counter % diag_period) == 0U) {
         mem_info();
 #if (C_LOG_LEVEL <= LOG_DEBUG_NUM) // 3 - debug
@@ -1933,14 +1917,16 @@ static bool run_periodic_diagnostics(uint32_t loop_counter) {
         }
 #endif
 #if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
+#if (C_LOG_LEVEL <= LOG_DEBUG_NUM) // 3 - debug
         /* Monitor ULP activity during wake time - shows if ULP is running */
         static uint32_t last_cycle_count = 0;
         uint32_t current_cycle = adc_ulp_get_cycle_count();
         int32_t delta = (int32_t)(current_cycle - last_cycle_count);
-        ILOG(TAG, "ULP cycle_count: %lu (delta: %ld since last check) - %s", 
+        DLOG(TAG, "ULP cycle_count: %lu (delta: %ld since last check) - %s", 
              current_cycle, delta, delta > 0 ? "RUNNING" : "FROZEN");
         last_cycle_count = current_cycle;
         debug_ulp_status();
+#endif
 #endif
         verbose = true;
     }
@@ -1954,7 +1940,7 @@ static void service_display(bool verbose, uint32_t loop_start_ms) {
 #if defined(CONFIG_DISPLAY_ENABLED)
 #if defined(CONFIG_LCD_IS_EPD)
     if(!m_app_ctx.screen_auto_refresh && !m_app_ctx.display.first_flush_done) {
-        printf("** Wait for first flush done %s\n", app_mode_str[m_app_ctx.app_mode]);
+        DLOG(TAG, "** Wait for first flush done %s", app_mode_str[m_app_ctx.app_mode]);
         return;
     }
 #endif
@@ -1962,9 +1948,9 @@ static void service_display(bool verbose, uint32_t loop_start_ms) {
     // WiFi mode change handling is now done via direct API calls from HID module
 #if defined(CONFIG_LCD_IS_EPD)
     if(!m_app_ctx.screen_auto_refresh && m_app_ctx.display.first_flush_done == 1) {
-        printf("** pause task when first_flush_done: %s %hhu count: %lu\n", app_mode_str[m_app_ctx.app_mode], m_app_ctx.display.first_flush_done, display_get_flush_count());
+        DLOG(TAG, "** pause task when first_flush_done: %s %hhu count: %lu", app_mode_str[m_app_ctx.app_mode], m_app_ctx.display.first_flush_done, display_get_flush_count());
         if(display_get_flush_count() >= 3 || (get_millis() - loop_start_ms) > SEC_TO_MS(12)) {
-            printf("** pause task when first_flush_done: %s %hhu count: %lu\n", app_mode_str[m_app_ctx.app_mode], m_app_ctx.display.first_flush_done, display_get_flush_count());
+            DLOG(TAG, "** pause task when first_flush_done: %s %hhu count: %lu", app_mode_str[m_app_ctx.app_mode], m_app_ctx.display.first_flush_done, display_get_flush_count());
             display_task_pause();
             m_app_ctx.display.first_flush_done = 2;
         }

@@ -67,14 +67,12 @@ int loadSleepScreen(ui_screen_status_t *status) {
     status->status_changed = ui_SleepScreen_screen_init();
     // ui_sleep_screen.screen.update_dims();
     if(lv_disp_get_scr_act(lv_disp_get_default()) != ui_sleep_screen.screen.self){
-#if (C_LOG_LEVEL < 3)
             ILOG(TAG, "[%s] load to screen", __func__);
-#endif
             lv_scr_load(ui_sleep_screen.screen.self);
     }
     status->has_status = ui_sleep_screen.screen.has_status_cnt;
     status->wait_time_ms = 0;
-#if (C_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL <= LOG_INFO_NUM)
     print_lv_mem_mon();
 #endif
     return ESP_OK;
@@ -102,9 +100,7 @@ int loadInfoScreen(info_scr_mode_t mode, ui_screen_status_t *status) {
     status->status_changed = ui_InfoScreen_screen_init(rows);
     // ui_info_screen.screen.update_dims();
     if(lv_disp_get_scr_act(lv_disp_get_default()) != ui_info_screen.screen.self){
-#if (C_LOG_LEVEL < 3)
         ILOG(TAG, "[%s] load to screen", __func__);
-#endif
         lv_scr_load(ui_info_screen.screen.self);
     }
     if(mode != ui_info_screen.info_screen_mode) {
@@ -112,7 +108,7 @@ int loadInfoScreen(info_scr_mode_t mode, ui_screen_status_t *status) {
     }
     status->has_status = ui_info_screen.screen.has_status_cnt;
     status->wait_time_ms = 0;
-#if (C_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL <= LOG_INFO_NUM)
     print_lv_mem_mon();
 #endif
     return ESP_OK;
@@ -133,15 +129,13 @@ int loadInitScreen(init_scr_mode_t mode, ui_screen_status_t *status) {
     status->has_status = ui_init_screen.screen.has_status_cnt;
     status->wait_time_ms = 0;
     if(lv_disp_get_scr_act(lv_disp_get_default()) != ui_init_screen.screen.self){
-#if (C_LOG_LEVEL < 3)
         ILOG(TAG, "[%s] load to screen", __func__);
-#endif
         lv_scr_load(ui_init_screen.screen.self);
     }
     if(mode != ui_init_screen.init_screen_mode) {
         ui_init_screen.init_screen_mode = mode;
     }
-#if (C_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL <= LOG_INFO_NUM)
     print_lv_mem_mon();
 #endif
     return ESP_OK;
@@ -177,12 +171,10 @@ int loadRecordScreen(ui_screen_status_t *status) {
     status->has_status = ui_record_screen.screen.has_status_cnt;
     status->wait_time_ms = 600U;
     if(lv_disp_get_scr_act(lv_disp_get_default()) != ui_record_screen.screen.self){
-#if (C_LOG_LEVEL < 3)
         ILOG(TAG, "[%s] load to screen", __func__);
-#endif
         lv_scr_load(ui_record_screen.screen.self);
     }
-#if (C_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL <= LOG_INFO_NUM)
     print_lv_mem_mon();
 #endif
     return ESP_OK;
@@ -270,12 +262,10 @@ int loadSpeedScreen(ui_screen_status_t *status) {
     status->wait_time_ms = 0;
     // ui_speed_screen.screen.update_dims();
     if(lv_disp_get_scr_act(lv_disp_get_default()) != ui_speed_screen.screen.self){
-#if (C_LOG_LEVEL < 3)
         ILOG(TAG, "[%s] load to screen", __func__);
-#endif
         lv_scr_load(ui_speed_screen.screen.self);
     }
-#if (C_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL <= LOG_INFO_NUM)
     print_lv_mem_mon();
 #endif
     return ESP_OK;
@@ -347,12 +337,10 @@ int loadStatsScreen(int rows, int cols, ui_screen_status_t *status) {
     status->wait_time_ms = 0;
     // ui_stats_screen.screen.update_dims();
     if(lv_disp_get_scr_act(lv_disp_get_default()) != ui_stats_screen.screen.self){
-#if (C_LOG_LEVEL < 3)
         ILOG(TAG, "[%s] load to screen", __func__);
-#endif
         lv_scr_load(ui_stats_screen.screen.self);
     }
-#if (C_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL <= LOG_INFO_NUM)
     print_lv_mem_mon();
 #endif
     return ESP_OK;
@@ -365,12 +353,10 @@ int loadBlankScreen(uint8_t invert, ui_screen_status_t *status) {
     status->has_status = ui_blank_screen.screen.has_status_cnt;
     status->wait_time_ms = 0;
     if(lv_disp_get_scr_act(lv_disp_get_default()) != ui_blank_screen.screen.self){
-#if (C_LOG_LEVEL < 3)
         ILOG(TAG, "[%s] load to screen", __func__);
-#endif
         lv_scr_load(ui_blank_screen.screen.self);
     }
-#if (C_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL <= LOG_INFO_NUM)
     print_lv_mem_mon();
 #endif
     return ESP_OK;
@@ -396,9 +382,7 @@ int set_label_text_safe(lv_obj_t * lbl, const char * title, uint8_t enable_hide_
     int ret = 0;
     if(title) {
         if(!lv_label_get_text(lbl) || (strcmp(lv_label_get_text(lbl), title) != 0)) {
-#if (C_LOG_LEVEL < 2)
-            ILOG(TAG,"[%s] set info label text %s", __func__, title);
-#endif
+            DLOG(TAG,"[%s] set info label text %s", __func__, title);
             lv_label_set_text(lbl, title);
             ret = 1;
             if(enable_hide_lbl && lv_obj_has_flag(lbl, LV_OBJ_FLAG_HIDDEN))
@@ -508,9 +492,7 @@ int showPushScreen(int push, const char * title, ui_screen_status_t *status) {
 }
 
 int showGpsTroubleScreen(ui_screen_status_t *status) {
-#if (C_LOG_LEVEL < 2)
-    ILOG(TAG, "[%s]", __func__);
-#endif
+    FUNC_ENTRY(TAG);
     int ret = loadInitScreen(INIT_MODE_GPS_TROUBLE, status);
     if(status->status_changed) {
         set_screen_img(ui_init_screen.init_img, &near_me_disabled_bold_48px, 0);
@@ -521,9 +503,7 @@ int showGpsTroubleScreen(ui_screen_status_t *status) {
 }
 
 int showSdTroubleScreen(ui_screen_status_t *status) {
-#if (C_LOG_LEVEL < 2)
-    ILOG(TAG, "[%s]", __func__);
-#endif
+    FUNC_ENTRY(TAG);
     int ret = loadInitScreen(INIT_MODE_SD_TROUBLE, status);
     if(status->status_changed) {
         set_screen_img(ui_init_screen.init_img, &sd_trouble_bold_48px, 0);
@@ -534,9 +514,7 @@ int showSdTroubleScreen(ui_screen_status_t *status) {
 }
 
 int showBootScreen(const char* title, ui_screen_status_t *status) {
-#if (C_LOG_LEVEL < 2)
-    ILOG(TAG, "[%s] title: %s", __func__, title);
-#endif
+    FUNC_ENTRY_ARGS(TAG, "title: %s", title);
     int ret = loadInitScreen(INIT_MODE_BOOT, status);
     if(status->status_changed) {
         set_screen_img(ui_init_screen.init_img, &espidf_logo_v2_48px, 0);
@@ -552,9 +530,7 @@ int showBootScreen(const char* title, ui_screen_status_t *status) {
 }
 
 int showSaveSessionScreen(const char * title, const char * info, const char * desc, ui_screen_status_t *status) {
-#if (C_LOG_LEVEL < 2)
-    ILOG(TAG, "[%s]", __func__);
-#endif
+    FUNC_ENTRY(TAG);
     int ret = loadInfoScreen(INFO_MODE_SAVE_SESSION, status);
     if(status->status_changed) {
         set_screen_img(ui_info_screen.info_img, &save_bold_48px, 0);
@@ -566,9 +542,7 @@ int showSaveSessionScreen(const char * title, const char * info, const char * de
 }
 
 int showWifiScreen(ui_screen_status_t *status) {
-#if (C_LOG_LEVEL < 2)
-    ILOG(TAG, "[%s]", __func__);
-#endif
+    FUNC_ENTRY(TAG);
     int ret = loadInfoScreen(INFO_MODE_WIFI, status);
     if(status->status_changed) {
         set_screen_img(ui_info_screen.info_img, &wifi_bold_48px, 0);
@@ -584,9 +558,7 @@ int showWifiScreen(ui_screen_status_t *status) {
 }
 
 int showGpsScreen(uint16_t angle, ui_screen_status_t *status) {
-#if (C_LOG_LEVEL < 2)
-    ILOG(TAG, "[%s]", __func__);
-#endif
+    FUNC_ENTRY(TAG);
     int ret = loadInfoScreen(INFO_MODE_GPS, status);
     if(status->status_changed || angle != lv_img_get_angle(ui_info_screen.info_img)) {
         set_screen_img(ui_info_screen.info_img, &near_me_bold_48px, angle);
@@ -599,16 +571,12 @@ int showGpsScreen(uint16_t angle, ui_screen_status_t *status) {
 }
 
 int showSpeedScreen(ui_screen_status_t *status) {
-#if (C_LOG_LEVEL < 2)
-    ILOG(TAG, "[%s]", __func__);
-#endif
+    FUNC_ENTRY(TAG);
     return loadSpeedScreen(status);
 }
 
 int showStatsScreen12(ui_screen_status_t *status) {
-#if (C_LOG_LEVEL < 2)
-    ILOG(TAG, "[%s]", __func__);
-#endif
+    FUNC_ENTRY(TAG);
     return loadStatsScreen(2,102, status);
 }
 

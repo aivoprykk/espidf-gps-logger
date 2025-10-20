@@ -29,7 +29,7 @@ extern "C" {
 #include "adc.h"
 #endif
 
-#if (C_LOG_LEVEL < 2)
+#if (C_LOG_LEVEL <= LOG_DEBUG_NUM)
 extern const char * const app_mode_str[];
 extern const char * const cur_screen_str[];
 #endif

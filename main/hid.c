@@ -124,9 +124,7 @@ static void button_timer_cb(void *arg) {
                         m_app_ctx.gps_cfg_item = CFG_GPS_ITEM_BASE;
                     else if(++m_app_ctx.gps_cfg_item >= (CFG_GPS_ITEM_BASE + gps_user_cfg_item_count))
                         m_app_ctx.gps_cfg_item = CFG_GPS_ITEM_BASE;
-#if (C_LOG_LEVEL < 2)
-                    ILOG(TAG, "[%s] gps settings next requested %hhu", __func__, m_app_ctx.gps_cfg_item);
-#endif
+                    DLOG(TAG, "[%s] gps settings next requested %hhu", __func__, m_app_ctx.gps_cfg_item);
                 }
                 else if(m_app_ctx.cfg_screen == CFG_GROUP_STAT_SCREENS) {
                     if(++m_app_ctx.stat_screen_cfg_item >= gps_stat_screen_item_count)
