@@ -11,7 +11,16 @@ class BuildConfig:
         self.project_name = "espidf-gps-logger"
 
         self.current_directory = os.getcwd()
-        self.output_path = os.path.join(self.current_directory, "build")
+        xpath = self.current_directory
+        while not os.path.exists(os.path.join(xpath, "CMakeLists.txt")):
+            parent = os.path.dirname(xpath)
+            if parent == xpath:
+                break
+            if parent == "/":
+                print("CMakeLists.txt not found in any parent directory.")
+                exit()
+            xpath = parent
+        self.output_path = os.path.join(xpath, "build")
 
 
 def copy_file(source_path, destination_path):
@@ -83,6 +92,12 @@ def clean_build(self):
         shutil.rmtree(self.output_path)
 
 def perform_action(self):
+    r = os.system("idf.py > " + os.devnull)
+    if r != 0:
+        print(
+            "Unable to execute idf.py, please see here to learn how to use and install https://github.com/espressif/esp-idf"
+        )
+        exit()
     clean_build(self)
     print(f"Performing action")
     # os.system("git submodule init")
@@ -134,21 +149,26 @@ def main():
     parser.add_argument("board", nargs="?", help="Board number (1-7)")
     args = parser.parse_args()
 
-    r = os.system("idf.py > " + os.devnull)
-    if r != 0:
-        print(
-            "Unable to execute idf.py, please see here to learn how to use and install https://github.com/espressif/esp-idf"
-        )
-        exit()
-    if isinstance(args.board, int) and 0 <= args.board <= 7:
-        user_choice = int(args.board)
-    elif args.board == "all":
-        user_choice = 0
+    if args.board:
+        if args.board == "all":
+            user_choice = 0
+        else:
+            try:
+                board_num = int(args.board)
+                if 0 <= board_num <= 7:
+                    user_choice = board_num
+                else:
+                    show_menu()
+                    user_choice = get_user_choice()
+            except ValueError:
+                print("Invalid input, please enter a number between 0 and 7 or 'all'.")
+                show_menu()
+                user_choice = get_user_choice()
     else:
         show_menu()
         user_choice = get_user_choice()
     if user_choice == 0:
-        for i in range(1, 8):
+        for i in range(7, 0, -1):
             perform_selection(self,i)
             perform_action(self)
             cp_result(self)

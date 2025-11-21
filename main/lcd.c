@@ -240,11 +240,11 @@ static const char * bat_to_char(char *str, bat_view_e_t mode) {
     const uint8_t state_perc = bat > 4.5 ? 110
                 : bat >= 4.2 ? 101
 #if defined(CONFIG_LOGGER_ADC_ENABLED)
-                : calc_bat_perc_v(bat);
+                : adc_calc_bat_perc(bat);
 #else
                 : 51;
 #endif
-    const char * s = adc_on_ac() ? LV_SYMBOL_CHARGE
+    const char * s = adc_is_charging() ? LV_SYMBOL_CHARGE
             : state_perc < 10  ? LV_SYMBOL_BATTERY_EMPTY
             : state_perc < 20  ? LV_SYMBOL_BATTERY_1
             : state_perc < 60  ? LV_SYMBOL_BATTERY_2
@@ -1123,7 +1123,7 @@ typedef enum {
 }  timer_stop_mode_t;
 
 static void stop_lv_timers(timer_stop_mode_t mode) {
-    FUNC_ENTRY_ARGSW(TAG, " mode: %d", mode);
+    FUNC_ENTRY_ARGW(TAG, " mode: %d", mode);
     if(mode != TIMER_STOP_SKIP_GPS && mode != TIMER_STOP_SKIP_MOST) {
         if(gps_timer) {
             lv_timer_del(gps_timer);
@@ -1413,27 +1413,24 @@ static uint32_t _update_screen(const struct display_s *me, const screen_mode_t s
                 struct push_forwarder_s * pf = (struct push_forwarder_s*)arg;
                 err = showPushScreen(pf->state, pf->title, &scr_status);
                 break;
+            case SCREEN_MODE_LOW_BAT:
+                link_for_low_bat:
+                state = ADC_BATTERY_CRITICAL_LOW;
+                goto lowbathop;
             case SCREEN_MODE_CHARGE:
-                if(state == ADC_BATTERY_CHARGING_STARTED)
+                if(state == ADC_BATTERY_CHARGING)
                     memcpy(pb, "Charging ", 9), pb += 9;
-                else if(state == ADC_BATTERY_CHARGING_STOPPED)
+                else if(state == ADC_BATTERY_CRITICAL_LOW)
+                    lowbathop:
+                    memcpy(pb, "Battery low ", 12), pb += 12;
+                else
                     memcpy(pb, "Stopped ", 8), pb += 8;
-                else if(state == ADC_BATTERY_NORMAL)
-                    memcpy(pb, "Good ", 5), pb += 5;
-                else if(state == ADC_BATTERY_HIGH)
-                    memcpy(pb, "Full ", 5), pb += 5;
                 pb += f2_to_char(adc_get_cached_batt_volt(), pb);
                 err = showChargeScreen(state, &str1[0], &scr_status);
                 // display_state.update_delay = 500;
                 break;
             case SCREEN_MODE_SD_TROUBLE:
                 err = showSdTroubleScreen(&scr_status);
-                break;
-            case SCREEN_MODE_LOW_BAT:
-                link_for_low_bat:
-                memcpy(pb, "Battery low ", 12), pb += 12;
-                pb += f2_to_char(adc_get_cached_batt_volt(), pb);
-                err = showLowBatScreen(&str1[0], &scr_status);
                 break;
             case SCREEN_MODE_FW_UPDATE:
                 const v_settings_t *s = arg;
@@ -1727,8 +1724,8 @@ uint32_t screen_cb(void* arg) {
 
     // Check if ADC has notified us of a charge event or if we're in charge mode
     if(adc_check_and_clear_lcd_charge_flag() || ctx->app_mode == APP_MODE_CHARGE) {
-        int32_t adc_state = get_adc_state();
-        delay = _update_screen(display_state.display, SCREEN_MODE_CHARGE, (void*)(&adc_state));
+        int adc_state = battery_get_current_battery_state();
+        delay = _update_screen(display_state.display, SCREEN_MODE_CHARGE, (void*)&adc_state);
         // Flag is automatically cleared by adc_check_and_clear_lcd_charge_flag()
         ctx->cur_screen = CUR_SCREEN_CHARGE;
         goto end;
@@ -1788,7 +1785,7 @@ uint32_t screen_cb(void* arg) {
         goto end;
     }
 
-    else if(get_adc_state() == ADC_BATTERY_CRITICAL_LOW) {
+    else if(battery_get_current_battery_state() == ADC_BATTERY_CRITICAL_LOW) {
         delay=_update_screen(display_state.display, SCREEN_MODE_LOW_BAT, 0);
         ctx->cur_screen = CUR_SCREEN_LOW_BAT;
         goto end;
@@ -1953,6 +1950,7 @@ uint32_t screen_cb(void* arg) {
         delay_ms(300U);
     }
     DMEAS_END(TAG);
+    print_lv_mem_mon();
     return delay;
 }
 

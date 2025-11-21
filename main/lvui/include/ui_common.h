@@ -346,7 +346,11 @@ typedef struct {
 void ui_init(void);
 void ui_deinit();
 
-void print_lv_mem_mon();
+#if (C_LOG_LEVEL <= LOG_WARN_NUM)  && defined(CONFIG_DISPLAY_USE_LVGL) && LV_MEM_CUSTOM == 0
+void print_lv_mem_mon(void);
+#else
+#define print_lv_mem_mon() (void)(0)
+#endif
 
 lv_obj_t * ui_common_screen_init(ui_screen_t * screen);
 lv_obj_t * ui_common_panel_init(lv_obj_t * parent, uint8_t w, uint8_t h);
