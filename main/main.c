@@ -23,11 +23,10 @@
 #include "adc.h"
 #include "adc_events.h"
 #if defined(CONFIG_ULP_COPROC_ENABLED)
-extern RTC_DATA_ATTR bool ulp_initialized;
 /* Track if ULP was running before sleep to handle intermediate timer wakes.
  * When ULP wakes → timer wake → long sleep, we need to resume ULP (not restart).
  * This flag persists across the intermediate timer wake. */
-RTC_DATA_ATTR static bool ulp_was_running = false;
+// RTC_DATA_ATTR static bool ulp_was_running = false;
 #endif
 #endif
 #ifdef CONFIG_BMX_ENABLE
@@ -380,7 +379,7 @@ static void low_to_sleep(uint64_t sleep_time, bool enable_ext0, uint8_t enable_u
      * 2. Timer wake after ULP wake: Resume ULP (flag persists through timer wake)
      * 3. Timer/button wake (fresh start): Start ULP with cleared history */
     esp_sleep_wakeup_cause_t prev_wake = esp_sleep_get_wakeup_cause();
-    bool is_ulp_resume = (prev_wake == ESP_SLEEP_WAKEUP_ULP) || ulp_was_running;
+    bool is_ulp_resume = (prev_wake == ESP_SLEEP_WAKEUP_ULP) || ulp_prog_is_initialized();
     
     // Enable ULP wakeup for battery monitoring if battery is low or critical
     // enable_ulp = false;
@@ -392,7 +391,7 @@ static void low_to_sleep(uint64_t sleep_time, bool enable_ext0, uint8_t enable_u
     /* Force enable_ulp=true if resuming from ULP wake (or timer wake after ULP wake),
      * otherwise the ULP will stop monitoring and never wake again */
     if (is_ulp_resume && !enable_ulp) {
-        ILOG(TAG, "Forcing ULP enable: resuming after ULP wake (was_running=%d)", ulp_was_running);
+        ILOG(TAG, "Forcing ULP enable: resuming after ULP wake (was_running=%d)", ulp_prog_is_initialized());
         enable_ulp = 1;
     }
     
@@ -401,13 +400,11 @@ static void low_to_sleep(uint64_t sleep_time, bool enable_ext0, uint8_t enable_u
          * - ULP wake (or timer after ULP): Resume monitoring, preserve ADC history
          * - Other wake: Clear ADC history for fresh sleep cycle (voltage changed during wake) */
         if (is_ulp_resume) {
-            ILOG(TAG, "Resuming ULP after ULP wake (preserving ADC history, was_running=%d)", ulp_was_running);
+            ILOG(TAG, "Resuming ULP after ULP wake (preserving ADC history, was_running=%d)", ulp_prog_is_initialized());
             resume_ulp_program();    // Resume ULP without clearing history
-            ulp_was_running = true;  // Keep flag set for next sleep
         } else {
             ILOG(TAG, "Starting ULP for fresh sleep cycle (clearing ADC history)");
-            start_ulp_program();     // Start ULP with fresh history
-            ulp_was_running = true;  // Set flag - ULP is now running
+            resume_ulp_program();     // Start ULP with fresh history
         }
  #if !CONFIG_IDF_TARGET_ESP32
         /* RTC peripheral power domain needs to be kept on to keep SAR ADC related configs during sleep */
@@ -416,7 +413,6 @@ static void low_to_sleep(uint64_t sleep_time, bool enable_ext0, uint8_t enable_u
     } else {
         /* ULP not enabled for this sleep - clear the flag.
          * This handles button wake → user activity → sleep without ULP */
-        ulp_was_running = false;
     }
 #endif
     
@@ -427,13 +423,12 @@ static void low_to_sleep(uint64_t sleep_time, bool enable_ext0, uint8_t enable_u
     /* Log ULP state right before deep sleep for debugging */
     if (enable_ulp) {
         ILOG(TAG, "Entering deep sleep - ULP cycle_count=%lu, was_running=%d", 
-             adc_ulp_get_cycle_count(), ulp_was_running);
+             adc_ulp_get_cycle_count(), ulp_prog_main_cpu_is_running());
     }
+    ulp_prog_set_main_cpu_running(false);
 #endif
     esp_deep_sleep(TO_M_UL(sleep_time));
 }
-
-
 
 // Battery low callback - called by ADC module when low battery timer expires
 static void on_low_battery_shutdown(void) {
@@ -475,15 +470,10 @@ static wakeup_plan_t wakeup_init(void) {
     uint8_t start_ulp = 0;
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
 #if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
-    if(wakeup_reason){
-        // ILOG(TAG, "ULP enabled, Logging ULP ADC values");
-        debug_ulp_status();
-    }
     /* Update last_wake_status based on current wake source:
      * - ULP ADC wake: save current as last for next comparison
      * - Other wake: clear last (no ADC wake to compare) */
-    uint8_t ulp_source = adc_ulp_after_wake();
-    
+    adc_ulp_wake_source_t ulp_source = adc_ulp_after_wake();
 #endif
     switch (wakeup_reason) {
         case ESP_SLEEP_WAKEUP_EXT0:
@@ -495,7 +485,7 @@ static wakeup_plan_t wakeup_init(void) {
 #if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
             /* Button wake means user wants to interact - clear the running flag
              * so ULP doesn't restart until user finishes and system goes to proper sleep */
-            ulp_was_running = false;
+            // ulp_was_running = false;
             goto ulp_clear_wake_sources;
 #endif
             break;
@@ -509,41 +499,38 @@ static wakeup_plan_t wakeup_init(void) {
             {
 #ifdef CONFIG_ULP_BUTTON_ENABLED
                 // Check if button long press detected
-                if (ulp_source & WAKE_SOURCE_BUTTON) {
+                if (ulp_source == WAKE_SOURCE_BUTTON) {
                     ILOG(TAG, "ULP button wake");
                     /* ULP button wake means user wants to interact - clear the running flag
                      * so ULP doesn't restart until user finishes and system goes to proper sleep */
-                    ulp_was_running = false;
+                    // ulp_was_running = false;
                 }
                 else 
-#endif
-                if (ulp_source & WAKE_SOURCE_ADC) {
-                    
+#endif                    
+                if (ulp_source == WAKE_SOURCE_BATTERY) {
                         adc_battery_state_t state = get_battery_state_from_ulp();
                         switch (state) {
-                            case ADC_BATTERY_LOW:
                             case ADC_BATTERY_CRITICAL_LOW:
                                 WLOG(TAG, "ULP wakeup: Battery critical low");
                                 plan.immediate_sleep = true;
                                 break;
-                            case ADC_BATTERY_CHARGING_STARTED:
+                            case ADC_BATTERY_CHARGING:
                                 ILOG(TAG, "ULP wakeup: Charging started");
                                 m_app_ctx.app_mode = APP_MODE_CHARGE;
                                 // ADC module manages both charge_state and charging_is_on
-                                adc_sync_initial_charging_state(1);
+                                // adc_sync_initial_charging_state(1);
                                 break;
+                            case ADC_BATTERY_NORMAL:
                             case ADC_BATTERY_CHARGING_STOPPED:
                                 ILOG(TAG, "ULP wakeup: Charging stopped");
                                 plan.immediate_sleep = true;
                                 // ADC module manages both charge_state and charging_is_on
-                                adc_sync_initial_charging_state(0);
+                                // adc_sync_initial_charging_state(0);
                                 break;
                             default:
                                 break;
                     }
-                }
-                
-                
+                }             
                 // NOTE: Do NOT start ULP here - main program is about to run and ULP can't
                 // run simultaneously with main CPU (both would access ADC). ULP will be
                 // started in low_to_sleep() just before entering deep sleep.
@@ -570,7 +557,7 @@ static wakeup_plan_t wakeup_init(void) {
             ILOG(TAG, "%s int: %d", wakeup_reasons[7], wakeup_reason);
             ulp_clear_wake_sources:
 #if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
-            adc_ulp_clear_wake_sources();
+            adc_ulp_clear_wake_sources(plan.immediate_sleep);
 #endif
             break;
     }
@@ -589,7 +576,7 @@ static wakeup_plan_t wakeup_init(void) {
 static void go_to_sleep_or_restart(wakeup_plan_t plan) {
     FUNC_ENTRY(TAG);
 #if defined(CONFIG_DISPLAY_ENABLED) && defined(CONFIG_LCD_IS_EPD)
-    if(!get_adc_charging_state()) {
+    if(!adc_is_charging()) {
         display_wait_for_task();
     }
 #endif
@@ -926,11 +913,6 @@ app_mode_t get_current_app_mode(void) {
     return m_app_ctx.app_mode;
 }
 
-// Get current charging state for ADC consistency checks
-bool get_current_charging_state(void) {
-    return get_adc_charging_state();
-}
-
 // Check if app is in a state where charge events should be filtered
 bool should_filter_charge_events(void) {
     // Filter charge events during boot - system not fully initialized
@@ -1084,7 +1066,7 @@ void task_app_mode_handler(int verbose) {
             if (m_app_ctx.app_mode == APP_MODE_SHUT_DOWN) {
 #if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
                 // Clear ULP wake state before sleep so it starts fresh
-                adc_ulp_clear_wake_sources();
+                adc_ulp_clear_wake_sources(false);
 #endif
                 go_to_sleep_or_restart((wakeup_plan_t){1, 2, false, false });
             } else {
@@ -1476,25 +1458,20 @@ static void adc_event_handler(void *handler_args, esp_event_base_t base, int32_t
                     DLOG(TAG, "[%s] ADC voltage updated to %.2fV", __FUNCTION__, voltage);
                 }
                 break;
-            case ADC_EVENT_BATTERY_LOW:
-            case ADC_EVENT_BATTERY_CRITICAL:
+            case ADC_EVENT_CRITICAL_LOW:
                 FUNC_ENTRY_ARGS(TAG, " %s", adc_event_strings(id));
                 // ADC module manages charge_state - no need to duplicate in main
                 goto refresh;
                 break;
-            case ADC_EVENT_BATTERY_HIGH:
-                FUNC_ENTRY_ARGS(TAG, " %s, no action", adc_event_strings(id));
-                // ADC module manages charge_state - no need to duplicate in main
-                break;
-            case ADC_EVENT_BATTERY_OK:
+            case ADC_EVENT_NORMAL:
                 FUNC_ENTRY_ARGS(TAG, " %s", adc_event_strings(id));
                 // Battery is back to normal - ADC module manages state, just refresh display
-                adc_battery_state_t current_state = get_adc_state();
+                adc_battery_state_t current_state = battery_get_current_battery_state();
                 if (current_state == ADC_BATTERY_NORMAL) {
                     goto refresh;
                 }
                 break;
-            case ADC_EVENT_CHARGE_STARTED:
+            case ADC_EVENT_CHARGING:
                 FUNC_ENTRY_ARGS(TAG, " %s", adc_event_strings(id));
                 if(m_app_ctx.app_mode == APP_MODE_BOOT) break;
                 // ADC module now manages charging_is_on flag internally
@@ -1503,7 +1480,7 @@ static void adc_event_handler(void *handler_args, esp_event_base_t base, int32_t
                 // WLOG(TAG, "main: charging started, voltage: %.2fV", m_context_rtc.RTC_voltage_bat);
                 goto refresh;
                 break;
-            case ADC_EVENT_CHARGE_STOPPED:
+            case ADC_EVENT_CHARGING_STOPPED:
                 FUNC_ENTRY_ARGS(TAG, " %s", adc_event_strings(id));
                 if(m_app_ctx.app_mode == APP_MODE_BOOT) break;
                 // ADC module now manages charging_is_on flag internally
@@ -1795,8 +1772,7 @@ static void setup(uint8_t initial) {
     delay_ms(100);
     
     // Check initial charging state during boot - but don't override wakeup-detected charge mode
-    adc_battery_state_t initial_state = get_adc_state();
-    ILOG(TAG, "Boot: Initial ADC state = %d, current app_mode = %s", initial_state, app_mode_str[m_app_ctx.app_mode]);
+    ILOG(TAG, "Boot: Initial ADC state = %d, current app_mode = %s", battery_get_current_battery_state(), app_mode_str[m_app_ctx.app_mode]);
     
     // if (m_app_ctx.app_mode != APP_MODE_CHARGE) {
     //     // Only set charge mode if not already set by wakeup init
@@ -1841,11 +1817,11 @@ static void setup(uint8_t initial) {
     delay_ms(INIT_DELAY_SHORT_MS);
 #endif
 
-    ILOG(TAG, "[%s] verbosity mode %d.", __FUNCTION__, C_LOG_LEVEL);
-    ILOG(TAG, "[%s] %s", __FUNCTION__, "Init done");
+    ILOG(TAG, "[%s] done, c_log_level:%d.", __FUNCTION__, C_LOG_LEVEL);
 }
 
 static void service_power_requests(void) {
+    FUNC_ENTRY_ARGT(TAG, " restart_req:%d shutdown_req:%d", m_context.request_restart, m_context.request_shutdown);
     const bool restart_requested = (m_context.request_restart > 0);
     const bool shutdown_requested = m_context.request_shutdown;
 
@@ -1881,6 +1857,7 @@ static void ensure_app_ready(void) {
         || m_app_ctx.app_mode == APP_MODE_RESTART) {
         return;
     }
+    FUNC_ENTRY_ARGT(TAG, " app_mode:%s", app_mode_str[m_app_ctx.app_mode]);
     if (vfs_ctx.vfs_initialized == 0) {
         logger_buffer_pool_init();
         vfs_init();
@@ -1896,16 +1873,17 @@ static void ensure_app_ready(void) {
 }
 
 static bool run_periodic_diagnostics(uint32_t loop_counter) {
+    FUNC_ENTRY_ARGT(TAG, " loop_counter:%lu", loop_counter);
     bool verbose = false;
-#if (C_LOG_LEVEL <= LOG_INFO_NUM)
+#if (C_LOG_LEVEL <= LOG_WARN_NUM)
     const uint32_t diag_period = 50U;
     if ((loop_counter % diag_period) == 0U) {
+        print_lv_mem_mon();
         mem_info();
 #if (C_LOG_LEVEL <= LOG_DEBUG_NUM) // 3 - debug
         tasks_memory_info();
         task_top();
 #endif
-        print_lv_mem_mon();
 #if (C_LOG_LEVEL <= LOG_INFO_NUM) // 2 - info
         if(m_app_ctx.app_mode == APP_MODE_GPS && m_context.gps.ubx_device) {
             struct ubx_msg_s *ubxMessage = &m_context.gps.ubx_device->ubx_msg;
@@ -1916,8 +1894,8 @@ static bool run_periodic_diagnostics(uint32_t loop_counter) {
             }
         }
 #endif
-#if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
 #if (C_LOG_LEVEL <= LOG_DEBUG_NUM) // 3 - debug
+#if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
         /* Monitor ULP activity during wake time - shows if ULP is running */
         static uint32_t last_cycle_count = 0;
         uint32_t current_cycle = adc_ulp_get_cycle_count();
@@ -1990,7 +1968,7 @@ static void cleanup(void) {
         m_app_ctx.config_initialized = 0;
     }
 #if defined(CONFIG_LOGGER_ADC_ENABLED)
-    if(get_adc_charging_state()) {
+    if(adc_is_charging()) {
         // Battery voltage is maintained by ADC timer automatically
         m_app_ctx.app_mode = APP_MODE_CHARGE;
         ILOG(TAG, "[%s] charging is on, go to charge mode.", __FUNCTION__);
@@ -2024,9 +2002,8 @@ void app_main(void) {
     while (1) {
         // Battery monitoring is now handled by ADC timer - no periodic calls needed
 
-        ++loop_counter;
         const bool verbose = run_periodic_diagnostics(loop_counter);
-
+        ++loop_counter;
         service_power_requests();
         ensure_app_ready();
         service_display(verbose, loop_start_ms);

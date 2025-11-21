@@ -159,7 +159,11 @@ static void ui_common_deinit() {
     if(!ui_init_done) return;
     ui_init_done = false;
     ui_status_panel_delete();
+#if LV_MEM_CUSTOM == 0
     lv_deinit();
+#else
+    lv_mem_deinit();
+#endif
 }
 
 void ui_deinit() {
@@ -268,21 +272,19 @@ void ui_invalidate_screens(void) {
 }
 
 
-#if (C_LOG_LEVEL <= LOG_INFO_NUM)
-void print_lv_mem_mon() {
+#if (C_LOG_LEVEL <= LOG_WARN_NUM) && defined(CONFIG_DISPLAY_USE_LVGL) && LV_MEM_CUSTOM == 0
+void print_lv_mem_mon(void) {
     lv_mem_monitor_t mon;
     lv_mem_monitor(&mon);
 #if LVGL_VERSION_MAJOR < 9
-    printf("used: %6lu (%3hhu %%), frag: %3hhu %%, biggest free: %6d\n", mon.total_size - mon.free_size,
+    printf("LVMEM: used: %6lu (%3hhu %%), frag: %3hhu %%, biggest free: %6d\n", mon.total_size - mon.free_size,
 #else
-    printf("used: %6u (%3u %%), frag: %3u %%, biggest free: %6d\n", mon.total_size - mon.free_size,
+    printf("LVMEM: used: %6u (%3u %%), frag: %3u %%, biggest free: %6d\n", mon.total_size - mon.free_size,
 #endif
             mon.used_pct,
             mon.frag_pct,
             (int)mon.free_biggest_size);
 }
-#else
-inline void print_lv_mem_mon() {}
 #endif
 
 

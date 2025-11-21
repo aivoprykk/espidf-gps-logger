@@ -11,9 +11,13 @@ local_components
 dependencies.lock
 .old
 version.txt
-sdkconfig*
+sdkconfig
+sdkconfi*.old
+sdkconfig.defaults
+sdkconfig.esp32*
 *.bin
 *.elf
 *.map
 *.log
 .ccls-cache
+*.c

@@ -45,7 +45,7 @@ static const char *TAG = "ui_ssd1681";
 // void ui_BlankScreen_screen_init(void);
 
 int loadSleepScreen(ui_screen_status_t *status) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     if (ui_sleep_screen.screen.self == 0) {
 #if defined(USE_2BPP_FONT)
         ui_sleep_screen.font.normal = &ui_font_OpenSansSemiBold16p2;
@@ -72,14 +72,11 @@ int loadSleepScreen(ui_screen_status_t *status) {
     }
     status->has_status = ui_sleep_screen.screen.has_status_cnt;
     status->wait_time_ms = 0;
-#if (C_LOG_LEVEL <= LOG_INFO_NUM)
-    print_lv_mem_mon();
-#endif
     return ESP_OK;
 }
 
 int loadInfoScreen(info_scr_mode_t mode, ui_screen_status_t *status) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     if (ui_info_screen.screen.self == 0) {
 #if defined(USE_2BPP_FONT)
         ui_info_screen.font.title = &ui_font_OswaldRegular24p2;
@@ -108,14 +105,11 @@ int loadInfoScreen(info_scr_mode_t mode, ui_screen_status_t *status) {
     }
     status->has_status = ui_info_screen.screen.has_status_cnt;
     status->wait_time_ms = 0;
-#if (C_LOG_LEVEL <= LOG_INFO_NUM)
-    print_lv_mem_mon();
-#endif
     return ESP_OK;
 }
 
 int loadInitScreen(init_scr_mode_t mode, ui_screen_status_t *status) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     if (ui_init_screen.screen.self == 0) {
 #if defined(USE_2BPP_FONT)
         ui_init_screen.font.title = &ui_font_OswaldRegular24p2;
@@ -135,14 +129,11 @@ int loadInitScreen(init_scr_mode_t mode, ui_screen_status_t *status) {
     if(mode != ui_init_screen.init_screen_mode) {
         ui_init_screen.init_screen_mode = mode;
     }
-#if (C_LOG_LEVEL <= LOG_INFO_NUM)
-    print_lv_mem_mon();
-#endif
     return ESP_OK;
 }
 
 int loadRecordScreen(ui_screen_status_t *status) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     if (ui_record_screen.screen.self == 0) {
 #if defined(USE_2BPP_FONT)
         ui_record_screen.font.info = &ui_font_OswaldRegular24p2;
@@ -174,9 +165,6 @@ int loadRecordScreen(ui_screen_status_t *status) {
         ILOG(TAG, "[%s] load to screen", __func__);
         lv_scr_load(ui_record_screen.screen.self);
     }
-#if (C_LOG_LEVEL <= LOG_INFO_NUM)
-    print_lv_mem_mon();
-#endif
     return ESP_OK;
 }
 
@@ -187,7 +175,7 @@ const lv_font_t * get_speed_title_font() {
 }
 
 int loadSpeedScreen(ui_screen_status_t *status) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     if (ui_speed_screen.screen.self == 0) {
 #if defined(USE_2BPP_FONT)
 #ifdef CONFIG_SSD168X_PANEL_SSD1681
@@ -265,14 +253,11 @@ int loadSpeedScreen(ui_screen_status_t *status) {
         ILOG(TAG, "[%s] load to screen", __func__);
         lv_scr_load(ui_speed_screen.screen.self);
     }
-#if (C_LOG_LEVEL <= LOG_INFO_NUM)
-    print_lv_mem_mon();
-#endif
     return ESP_OK;
 }
 
 int loadStatsScreen(int rows, int cols, ui_screen_status_t *status) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     if (ui_stats_screen.screen.self == 0) {
 #if defined(USE_2BPP_FONT)
 #if defined(CONFIG_SSD168X_PANEL_SSD1681)
@@ -340,14 +325,11 @@ int loadStatsScreen(int rows, int cols, ui_screen_status_t *status) {
         ILOG(TAG, "[%s] load to screen", __func__);
         lv_scr_load(ui_stats_screen.screen.self);
     }
-#if (C_LOG_LEVEL <= LOG_INFO_NUM)
-    print_lv_mem_mon();
-#endif
     return ESP_OK;
 }
 
 int loadBlankScreen(uint8_t invert, ui_screen_status_t *status) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     status->status_changed = ui_BlankScreen_screen_init();
     ui_blank_screen.invert = invert;
     status->has_status = ui_blank_screen.screen.has_status_cnt;
@@ -356,9 +338,6 @@ int loadBlankScreen(uint8_t invert, ui_screen_status_t *status) {
         ILOG(TAG, "[%s] load to screen", __func__);
         lv_scr_load(ui_blank_screen.screen.self);
     }
-#if (C_LOG_LEVEL <= LOG_INFO_NUM)
-    print_lv_mem_mon();
-#endif
     return ESP_OK;
 }
 
@@ -410,17 +389,17 @@ int invert_colors(lv_obj_t * panel, bool invert) {
 }
 
 int showBlankScreen(uint8_t invert, ui_screen_status_t *status) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     return loadBlankScreen(invert, status);
 }
 
 int showSleepScreen(ui_screen_status_t *status) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     return loadSleepScreen(status);
 }
 
 int showRecordScreen(bool invert, ui_screen_status_t *status) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     int ret = loadRecordScreen(status);
     lv_obj_t* panel = ui_record_screen.screen.main_cnt;
     if(panel) {
@@ -430,7 +409,7 @@ int showRecordScreen(bool invert, ui_screen_status_t *status) {
 }
 
 int showFwUpdateScreen(const char * title, const char * info, const char * desc, ui_screen_status_t *status) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     int ret = loadInfoScreen(INFO_MODE_FW_UPDATE, status);
     if(status->status_changed) {
         set_screen_img(ui_info_screen.info_img, &update_48px, 0);
@@ -442,7 +421,7 @@ int showFwUpdateScreen(const char * title, const char * info, const char * desc,
 }
 
 int showSettingsScreen(const char * title, const char * info, const char * desc, ui_screen_status_t *status) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     int ret = loadInfoScreen(INFO_MODE_SETTINGS, status);
     if(status->status_changed) {
         set_screen_img(ui_info_screen.info_img, &settings_48px, 0);
@@ -454,7 +433,7 @@ int showSettingsScreen(const char * title, const char * info, const char * desc,
 }
 
 int showLowBatScreen(const char * title, ui_screen_status_t *status) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     int ret = loadInitScreen(INIT_MODE_LOW_BAT, status);
     if(status->status_changed) {
         set_screen_img(ui_init_screen.init_img, &battery_horiz_bold_48px, 0);
@@ -469,10 +448,10 @@ int showLowBatScreen(const char * title, ui_screen_status_t *status) {
 }
 
 int showChargeScreen(int mode, const char * title, ui_screen_status_t *status) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     int ret = loadInitScreen(ADC_BATTERY_CRITICAL_LOW, status);
     if(status->status_changed) {
-        set_screen_img(ui_init_screen.init_img, mode != 2 ? &electric_bolt_48px : &battery_horiz_bold_48px, 0);
+        set_screen_img(ui_init_screen.init_img, mode != ADC_ULP_BATTERY_CRITICAL_LOW ? &electric_bolt_48px : &battery_horiz_bold_48px, 0);
         lv_obj_set_y(ui_init_screen.init_img, lv_pct(-5));
     }
     set_label_text_safe(ui_init_screen.init_lbl, title, 1);
@@ -481,7 +460,7 @@ int showChargeScreen(int mode, const char * title, ui_screen_status_t *status) {
 }
 
 int showPushScreen(int push, const char * title, ui_screen_status_t *status) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     int ret = loadInitScreen(INIT_MODE_PUSH_BUTTON, status);
     set_screen_img(ui_init_screen.init_img, push==1 ? &radio_button_partial_24px : push==2 ? &radio_button_checked_24px : &radio_button_unchecked_24px, 0);
     if(status->status_changed) {
@@ -514,7 +493,7 @@ int showSdTroubleScreen(ui_screen_status_t *status) {
 }
 
 int showBootScreen(const char* title, ui_screen_status_t *status) {
-    FUNC_ENTRY_ARGS(TAG, "title: %s", title);
+    // FUNC_ENTRY_ARGS(TAG, "title: %s", title);
     int ret = loadInitScreen(INIT_MODE_BOOT, status);
     if(status->status_changed) {
         set_screen_img(ui_init_screen.init_img, &espidf_logo_v2_48px, 0);
@@ -581,11 +560,11 @@ int showStatsScreen12(ui_screen_status_t *status) {
 }
 
 int showStatsScreen22(ui_screen_status_t *status) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     return loadStatsScreen(2,2, status);
 }
 
 int showStatsScreen32(ui_screen_status_t *status) {
-    ILOG(TAG, "[%s]", __func__);
+    FUNC_ENTRY(TAG);
     return loadStatsScreen(3,2, status);
 }

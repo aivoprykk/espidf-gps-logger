@@ -104,7 +104,7 @@ static void button_timer_cb(void *arg) {
                 // in charge mode, ignore long press
                 m_context.request_restart = true;
 #if defined(CONFIG_LOGGER_ADC_ENABLED) && defined(CONFIG_ULP_COPROC_ENABLED)
-                adc_ulp_clear_wake_sources();
+                adc_ulp_clear_wake_sources(false);
 #endif
                 goto refresh;
             }
