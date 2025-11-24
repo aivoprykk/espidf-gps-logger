@@ -89,7 +89,7 @@ def clean_build(self):
     if os.path.isfile(sdkconfig_path):
         os.remove(sdkconfig_path)
     if os.path.exists(self.output_path):
-        shutil.rmtree(self.output_path)
+        os.system("rm -rf " + self.output_path)
 
 def perform_action(self):
     r = os.system("idf.py > " + os.devnull)
